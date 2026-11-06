@@ -62,7 +62,7 @@ uv run python3 experiments/synth_dataset.py --out data/synth --clean 150 --singl
 ls data/synth/*.json | wc -l   # MUST be 580 — verify after EVERY generation
 ```
 
-⚠️ The generator **appends** — never run it into a non-empty `data/synth/` unless you intend duplication (duplicated snapshots invalidate out-of-fold CV; see *Dataset provenance* below).
+The generator **appends** — never run it into a non-empty `data/synth/` unless you intend duplication (duplicated snapshots invalidate out-of-fold CV; see *Dataset provenance* below).
 
 **Train:**
 
@@ -112,7 +112,7 @@ python3 /root/collect.py --host-id <id> --tag <tag> --label <clean|vulnerable> [
 - **Label-collision fix (Nov 2026):** clean baselines originally carried strict-risk noise (firewall-down ~25%, weak password policy ~15%, etc.) identical to injected misconfig signatures, making five misconfig types unlearnable (recall 0.847). Strict-risk noise was removed from clean baselines; debatable soft risks (password auth ~30%, fail2ban absent ~80%) deliberately retained. Post-fix out-of-fold: precision 0.993, recall 0.970, ROC-AUC 0.990. M02 (SSH password auth) remains intentionally blurred — see eval report.
 - **Real set (pending):** snapshots from disposable Proxmox LXC clones on HWHS-001; destroy-instead-of-revert guarantees zero residue. Train/test separation is mandatory and structural: synth trains, real tests.
 
-## Model / agent contract (for partner work and any future trainer)
+## Model / agent contract
 
 The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 
@@ -120,8 +120,6 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 2. Key order: **alphabetically sorted**
 3. Missing/`null` features: masked to **0.0**
 4. Orientation: all `risk_*` features oriented so **1 = insecure**
-
-Any trainer (including the CS-partner implementation) that follows this can drop its model in as `train/model.joblib` with zero agent changes. The agent's `_vectorize()` and `train.py` implement this identically.
 
 ## Key results (as of progress presentation)
 

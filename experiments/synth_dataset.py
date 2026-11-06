@@ -28,6 +28,7 @@ collected from Proxmox LXC clones. Report both.
 
 import argparse
 import json
+import sys
 import os
 import random
 import time
@@ -261,7 +262,15 @@ def main():
     ap.add_argument("--misconfigs", nargs="*", default=ALL_IDS)
     ap.add_argument("--profiles", nargs="*", default=list(PROFILES.keys()))
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--append", action="store_true",
+                    help="allow writing into non-empty --out directory")
     args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    existing = os.listdir(args.out)
+    if existing and not args.append:
+        sys.exit(f"[!] {args.out} is not empty ({len(existing)} files) - "
+                 f"purge it (rm {args.out}/*.json or pass -- append")
 
     rng = random.Random(args.seed)
     os.makedirs(args.out, exist_ok=True)

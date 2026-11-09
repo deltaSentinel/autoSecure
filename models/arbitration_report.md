@@ -7,36 +7,27 @@
 
 | Detector | Accuracy | Precision | Recall | F1 | ROC-AUC | FP (on clean) |
 |----------|----------|-----------|--------|-----|---------|--------------|
-| L0 (reflex) | 0.876 | 1.000 | 0.833 | 0.909 | n/a | 0 |
+| L0 (reflex) | 0.955 | 1.000 | 0.940 | 0.969 | n/a | 0 |
 | L1 (ML) | 0.972 | 0.993 | 0.970 | 0.981 | 0.990 | 3 |
-| HYBRID (union) | 0.972 | 0.993 | 0.970 | 0.981 | n/a | 3 |
-| INTERSECT | 0.876 | 1.000 | 0.833 | 0.909 | n/a | 0 |
+| HYBRID (union) | 0.976 | 0.993 | 0.974 | 0.984 | n/a | 3 |
+| INTERSECT | 0.952 | 1.000 | 0.935 | 0.966 | n/a | 0 |
 
 ## Layer overlap (on vulnerable samples)
 
-- Caught by BOTH layers: **358**
-- Caught ONLY by L0 (reflex): **0**
-- Caught ONLY by L1 (classifier): **62** — *the compound-config blind-spot evidence for hybrid design*
-- Missed by ALL detectors: **13**
+- Caught by BOTH layers: **402**
+- Caught ONLY by L0 (reflex): **2**
+- Caught ONLY by L1 (classifier): **18** — *the compound-config blind-spot evidence for hybrid design*
+- Missed by ALL detectors: **11**
 
 ## Blind spots by tag (vulnerable samples missed)
 
 | Tag | Missed by L0 | Missed by L1 | Missed by HYBRID |
 |-----|--------------|--------------|------------------|
-| M01 | 12 | 1 | 1 |
+| M01 | 0 | 1 | 0 |
 | M02 | 12 | 11 | 11 |
-| M05 | 12 | 1 | 1 |
+| M05 | 0 | 1 | 0 |
 | M11 | 12 | 0 | 0 |
-| M12 | 12 | 0 | 0 |
-| combo-M02-M05 | 1 | 0 | 0 |
 | combo-M02-M11 | 2 | 0 | 0 |
-| combo-M02-M12 | 1 | 0 | 0 |
-| combo-M05-M02 | 2 | 0 | 0 |
-| combo-M11-M12 | 1 | 0 | 0 |
-| combo-M12-M01 | 1 | 0 | 0 |
-| combo-M12-M01-M02 | 1 | 0 | 0 |
-| combo-M12-M05 | 2 | 0 | 0 |
-| combo-M12-M11 | 1 | 0 | 0 |
 
 ## Interpretation guide
 

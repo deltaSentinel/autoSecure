@@ -190,6 +190,12 @@ REFLEX_RULES = [
      0.8, "FTP service exposed (cleartext protocol)"),
     ("R12", lambda r: r.get("services", {}).get("snmp_open") is True,
      0.6, "SNMP service exposed"),
+     ("R13", lambda r: str(r.get("ssh", {}).get("permit_root_login")).lower() == "yes",
+     0.8, "SSH PermitRootLogin enabled - direct root login permitted"),
+     ("R14", lambda r: bool(r.get("filesystem", {}).get("world_writable_dirs_no_sticky")),
+     0.7, "World-writable directories without sticky bit"),
+     ("R15", lambda r: bool(r.get("filesystem", {}).get("world_writable_files_in_etc")),
+     0.9, "World-writable files under /etc"),
 ]
 
 

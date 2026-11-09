@@ -33,7 +33,7 @@ aiProject/
 ├── train/          # train.py, eval_holdout.py; agent model drop point
 ├── data/
 │   ├── synth/      # synthetic training snapshots (regenerable — seed 7)
-│   └── real/        # real LXC snapshots (break phase) — NEVER mixed with synth
+│   └── real/       # real LXC snapshots (break phase) — NEVER mixed with synth
 ├── models/         # model.joblib, feature_keys.json, importances.csv,
 │                   # eval_report.md, arbitration_report.md, threshold_sweep.csv
 ├── reports/        # agent scan reports (Markdown)

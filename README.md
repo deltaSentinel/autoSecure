@@ -146,7 +146,7 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 - [x] Progress presentation
 - [ ] Break phase: real dataset via Proxmox LXC clone loop (`gen_dataset.py` / pct workflow)
 - [ ] Transfer test (`eval_holdout.py`) + arbitration rerun on real data
-- [ ] Rule extension R13–R15 (blind-spot-driven: PermitRootLogin, world-writable dirs, world-writable /etc)
+- [x] Rule extension R13–R15 (blind-spot-driven: PermitRootLogin, world-writable dirs, world-writable /etc)
 - [ ] Planner-utility experiment (`--alpha/--beta/--gamma` sweep)
 - [ ] Final report + presentation
 

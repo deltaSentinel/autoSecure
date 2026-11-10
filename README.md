@@ -1,6 +1,6 @@
 # AutoSecure
 
-![CI](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml/badge.svg)](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 
 AI-driven vulnerability and misconfiguration detection for personal computing environments — a four-layer hybrid agent combining hand-written reflex rules with a learned classifier, developed as a semester project for AI-472.

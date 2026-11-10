@@ -1,8 +1,10 @@
 data/
 *.db
 models/*.joblib
+models/*.md
 __pycache__/
 .venv/
 demo_*.txt
 *.swp
 report_scan*.md
+

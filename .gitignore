@@ -4,3 +4,4 @@ models/*.joblib
 __pycache__/
 .venv/
 demo_*.txt
+*.swp

@@ -4,12 +4,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def test_fixtures_valid_and_paired():
+    import json
+    ids = []
+    for name in ("scan_clean.json", "scan_m11.json"):
+        with open(ROOT / "tests" / "fixtures" / name) as fh:
+            d = json.load(fh)          # fails loudly on empty/garbage
+        ids.append(d["meta"].get("host_id"))
+    assert ids[0] == ids[1], f"fixture host_ids differ: {ids} — R16 baseline won't link"
+
 def _scan(snapshot, db):
-    subprocess.run(
+    r = subprocess.run(
         [sys.executable, str(ROOT / "agent" / "main.py"),
          "--snapshot", str(ROOT / "tests" / "fixtures" / snapshot),
          "--db", str(db)],
         cwd=ROOT, check=True, capture_output=True, text=True)
+    assert r.returncode == 0, \
+            f"agent exited {r.returncode}\n--- stderr ---\n{r.stderr}\n--- stdout ---\n{r.stdout}"
 
 def _findings(db):
     con = sqlite3.connect(db)

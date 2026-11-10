@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "collector_version": "1.1.0",
+    "collected_at": "2026-11-10T03:11:52.306281+00:00",
+    "host_id": "synth-desk",
+    "tag": "M11",
+    "label": "vulnerable",
+    "injected_misconfigs": [
+      "M11"
+    ],
+    "ran_as_root": true,
+    "check_errors": [],
+    "synthetic": true,
+    "generator": "synth_dataset.py"
+  },
+  "features_raw": {
+    "ssh": {
+      "permit_root_login": "no",
+      "password_authentication": "yes",
+      "permit_empty_passwords": "no"
+    },
+    "filesystem": {
+      "shadow_permissions": "640",
+      "world_writable_files_in_etc": 0,
+      "world_writable_dirs_no_sticky": 0,
+      "suid_binaries": 211
+    },
+    "accounts": {
+      "users_uid0_extra": [],
+      "users_empty_password": [],
+      "sudo_nopasswd_entries": [],
+      "accounts_with_login_shell": []
+    },
+    "login_defs": {
+      "pass_min_len": 10,
+      "pass_max_days": 90
+    },
+    "network_defense": {
+      "firewall_active": true,
+      "fail2ban_active": false
+    },
+    "updating": {
+      "unattended_upgrades_enabled": true
+    },
+    "services": {
+      "telnet_open": false,
+      "ftp_open": false,
+      "snmp_open": false,
+      "listening_ports": [
+        22
+      ]
+    }
+  },
+  "features_ml": {
+    "risk_ssh_permit_root_login": 0,
+    "risk_ssh_password_auth": 1,
+    "risk_ssh_empty_passwords": 0,
+    "risk_world_writable_etc_files": 0,
+    "risk_world_writable_dirs_no_sticky": 0,
+    "risk_suid_binaries": 2,
+    "risk_sgid_binaries": 102,
+    "risk_shadow_world_readable": 0,
+    "risk_shadow_group_writable": 0,
+    "risk_users_uid0_extra": 0,
+    "risk_users_empty_password": 0,
+    "risk_sudo_nopasswd": 0,
+    "num_accounts_with_shell": 6,
+    "risk_weak_password_policy": 0,
+    "risk_firewall_disabled": 0,
+    "risk_fail2ban_absent": 1,
+    "risk_autoupdates_disabled": 0,
+    "risk_pending_updates": 27,
+    "risk_pending_security_updates": 14,
+    "risk_telnet_open": 0,
+    "risk_ftp_open": 0,
+    "risk_snmp_open": 0,
+    "risk_ssh_default_port_open": 1,
+    "num_listening_ports": 24,
+    "num_running_services": 49
+  }
+}

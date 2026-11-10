@@ -49,7 +49,7 @@ aiProject/
 Python 3.12, managed with `uv`. From the project root:
 
 ```bash
-uv venv && uv pip install scikit-learn joblib numpy
+uv venv && uv pip install scikit-learn joblib numpy pytest
 ```
 
 Everything else is stdlib. Whole pipeline runs offline. No GPU, no special hardware.

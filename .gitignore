@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 demo_*.txt
 *.swp
+report_scan*.md

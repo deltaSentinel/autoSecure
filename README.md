@@ -65,7 +65,7 @@ uv run python3 experiments/synth_dataset.py --out data/synth --clean 150 --singl
 ls data/synth/*.json | wc -l   # MUST be 580 — verify after EVERY generation
 ```
 
-The generator **appends** — never run it into a non-empty `data/synth/` unless you intend duplication (duplicated snapshots invalidate out-of-fold CV; see *Dataset provenance* below).
+The generator **appends**: never run it into a non-empty `data/synth/` unless you intend duplication (duplicated snapshots invalidate out-of-fold CV; see *Dataset provenance* below).
 
 **Train:**
 
@@ -127,17 +127,17 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 ## Key results (as of progress presentation)
 
 - Out-of-fold (RF, 580 synthetic): P 0.993 / R 0.970 / F1 0.981 / AUC 0.990; 3 FP, 13 FN
-- Model comparison: RF 0.981 · SVM 0.982 · LR 0.977 (F1) — architecture, not model choice, is load-bearing
+- Model comparison: RF 0.981 · SVM 0.982 · LR 0.977 (F1): architecture, not model choice, is load-bearing
 - Arbitration at threshold 0.5: layers nest (L0 ⊂ L1; 62 classifier-only detections, 0 reflex-only)
-- Threshold sweep: at t=0.95 hybrid F1 0.910 vs classifier-only 0.646 — the rule layer is threshold-invariant recall insurance; justifies the hybrid at strict operating points
+- Threshold sweep: at t=0.95 hybrid F1 0.910 vs classifier-only 0.646: the rule layer is threshold-invariant recall insurance; justifies the hybrid at strict operating points
 - Registered prediction for the real-data phase: the default-threshold nesting breaks on real hosts (clean machines carry out-of-catalog misconfigurations)
 
 ## Known pitfalls (institutional memory)
 
 1. **The generator appends.** Verify `ls data/synth/*.json | wc -l == 580` after every run. Duplicates silently inflate out-of-fold metrics (twin-in-fold leakage).
 2. **Relative paths assume project root** (except `eval_holdout.py`, which assumes `train/`).
-3. **Multiline pastes break `\` continuations** — treat every documented command as single-line.
-4. **`arb_experiment.py`'s agent-dir default** is `../agent` relative to `experiments/` — if the script moves again, that one sed must follow.
+3. **Multiline pastes break `\` continuations**: treat every documented command as single-line.
+4. **`arb_experiment.py`'s agent-dir default** is `../agent` relative to `experiments/` if the script moves again, a sed or manual change must be made
 
 ## Status & next steps
 

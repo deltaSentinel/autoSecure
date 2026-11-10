@@ -47,6 +47,8 @@ try:
     from sklearn.metrics import (confusion_matrix, f1_score,
                                  precision_score, recall_score, roc_auc_score)
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
+    from sklearn.pipeline import Pipeline
+    from sklearn.calibration import CalibratedClassifierCV
 except ImportError as e:
     sys.exit(f"[-] missing dependency: {e}")
 
@@ -104,6 +106,12 @@ def l0_decisions(samples):
     return np.array([p for p, _ in preds]), preds
 
 
+def base_rf(seed=42):
+    return Pipeline([("clf", RandomForestClassifier(
+            n_estimators=200, min_samples_leaf=2, class_weight="balanced",
+            random_state=seed, n_jobs=-1))])
+
+
 def l1_probabilities(samples, keys, seed, folds):
     """Out-of-fold classifier probabilities (leakage-free)."""
     X = np.array([[0.0 if s["ml"].get(k) is None else float(s["ml"].get(k, 0.0))
@@ -111,9 +119,7 @@ def l1_probabilities(samples, keys, seed, folds):
     y = np.array([s["label"] for s in samples])
     n_folds = min(folds, Counter(y)[min(Counter(y))])
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    model = RandomForestClassifier(n_estimators=200, min_samples_leaf=2,
-                                   class_weight="balanced",
-                                   random_state=seed, n_jobs=-1)
+    model = CalibratedClassifierCV(estimator=base_rf(), method="sigmoid")
     prob = cross_val_predict(model, X, y, cv=skf,
                              method="predict_proba")[:, 1]
     print(f"[+] L1 out-of-fold probabilities via {n_folds}-fold CV")

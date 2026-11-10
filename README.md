@@ -131,6 +131,8 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 - Arbitration at threshold 0.5: layers nest (L0 ⊂ L1; 62 classifier-only detections, 0 reflex-only)
 - Threshold sweep: at t=0.95 hybrid F1 0.910 vs classifier-only 0.646: the rule layer is threshold-invariant recall insurance; justifies the hybrid at strict operating points
 - Registered prediction for the real-data phase: the default-threshold nesting breaks on real hosts (clean machines carry out-of-catalog misconfigurations)
+- Uncalibrated: L1-only F1 = 0.646, hybrid = 0.969
+  Calibrated: L1-only F1 = 0.914, hybrid 0.981
 
 ## Known pitfalls (institutional memory)
 
@@ -158,7 +160,7 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 **Tier 1**
 - [ ] R13-R16 remediation paths: Each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
 - [x] Pytest regression suite: Formalize echo test with tests/ dir with a known positive and negative per rule ID.
-- [ ] Probability calibration for L1: Platt scaling or isotonic regression with threshold sweep to set operating point.- Utility coefficieant tuning: Currently coefficients are hand set. Collect labeled sets of tuples and fit coefficients against outcomes
+- [x] Probability calibration for L1: Platt scaling or isotonic regression with threshold sweep to set operating point.- Utility coefficieant tuning: Currently coefficients are hand set. Collect labeled sets of tuples and fit coefficients against outcomes
 
 **Tier 2**
 - [ ] Real-data retraining and hybrid datasets: After break-phase training see if hybrid real/synth changes results. Also allows for better setting of synth data generation
@@ -167,6 +169,7 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 - [ ] Multi-host: Extend planner for multiple hosts
 - [ ] Second collector backend (dnf/rpm): Set up agnosticism for data collect 
 - [ ] Benchmark vs Scanner: Verify our results against Lynis or OpenSCAP to compare results and prove validity
+- [ ] If more data becomes available consider changing from Platt scaling to Isotonic regression (currently it would over fit data)
 
 **Tier 3**
 - [ ] Adversarial Evasion Analysis: Study if peature perturbations can mask a signature

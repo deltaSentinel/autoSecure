@@ -46,6 +46,7 @@ try:
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
     from sklearn.svm import SVC
+    from sklearn.calibration import CalibratedClassifierCV
 except ImportError as e:
     sys.exit(f"[-] missing dependency: {e}\n"
              "    install with: pip install scikit-learn joblib numpy "
@@ -172,6 +173,37 @@ def metrics_from_cv(X, y, folds, seed, verbose=True):
     }
     return m, y_pred, y_prob, skf
 
+def calibration_evidence(X, y, skf, seed):
+    """OOF probabilities, raw vs. Platt-calibrated -> Brier + bins."""
+    from sklearn.metrics import brier_score_loss
+    raw = cross_val_predict(build_model("rf", seed), X, y, cv=skf,
+                            method="predict_proba")[:,1]
+    cal = cross_val_predict(
+            CalibratedClassifierCV(estimator=build_model("rf", seed),
+                                   method="sigmoid"), X, y, cv=skf,
+            method="predict_proba")[:,1]
+    return ({"brier_raw": float(brier_score_loss(y, raw)),
+             "brier_cal": float(brier_score_loss(y, cal))}, raw, cal)
+
+def append_calibration_report(path, ev, y, cal_probs, n_bins=10):
+    lines = ["", "## Probability calibration (Platt sigmoid, nested CV)", "",
+             "| Scores | Brier (lower = better) |", "|---|---|",
+             f"| Uncalibrated RF votes | {ev['brier_raw']:.4f} |",
+             f"| Calibrated (exported model) | {ev['brier_cal']:.4f} |", "",
+             "Reliability bins, calibrated (predicted vs observed):", "",
+             "| bin center | observed vuln rate | n |", "|---|---|---|"]
+    edges = np.linspace(0, 1, n_bins + 1)
+    for i in range(n_bins):
+        sel = ((cal_probs >= edges[i]) &
+               ((cal_probs < edges[i + 1]) if i < n_bins - 1
+                else (cal_probs <= edges[i + 1])))
+        if sel.sum():
+            lines.append(f"| {(edges[i]+edges[i+1])/2:.2f} | "
+                         f"{y[sel].mean():.3f} | {int(sel.sum())} |")
+    lines.append("")
+    with open(path, "a") as fh:
+        fh.write("\n".join(lines))
+    print(f"[+] calibration evidence -> {path}")
 
 def compare_models(X, y, folds, seed):
     """Three-model comparison for the report — out-of-fold, same folds."""
@@ -311,8 +343,16 @@ def main():
     cmp_rows = compare_models(X, y, max(args.folds, skf.n_splits), args.seed)
 
     # 4. Train final model on ALL data — this is what gets deployed
-    model = build_model(args.model, args.seed)
-    model.fit(X, y)
+    base = build_model(args.model, args.seed)
+    base.fit(X, y)
+    if args.model == "rf":
+        model = CalibratedClassifierCV(
+                estimator = build_model("rf", args.seed),
+                method = "sigmoid", cv = skf)
+        model.fit(X, y)
+        print("[+] RF export is Platt-calibrated (sigmoid, internal 5-fold)")
+    else:
+        model = base
 
     # 5. Export artifacts
     model_path = os.path.join(args.out, "model.joblib")
@@ -329,12 +369,16 @@ def main():
     print(f"[+] canonical feature order -> {keys_path}")
 
     imp_path = os.path.join(args.out, "importances.csv")
-    importances = export_importances(model, feature_keys, imp_path)
+    importances = export_importances(base, feature_keys, imp_path)
 
     # 6. Written evaluation report (slide-ready tables)
     write_eval_report(os.path.join(args.out, "eval_report.md"),
                       len(X), feature_keys, args.model, m, cm, cmp_rows,
                       tags, y, y_pred, importances)
+
+    ev, raw_p, cal_p = calibration_evidence(X, y, skf, args.seed)
+    append_calibration_report(os.path.join(args.out, "eval_report.md"),
+                              ev, y, cal_p)
 
     print("\n=== Summary (out-of-fold) ===")
     print(classification_report(y, y_pred, target_names=["clean",

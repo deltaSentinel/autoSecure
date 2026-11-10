@@ -157,7 +157,7 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 
 **Tier 1**
 - [ ] R13-R16 remediation paths: Each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
-- [ ] Pytest regression suite: Formalize echo test with tests/ dir with a known positive and negative per rule ID.
+- [x] Pytest regression suite: Formalize echo test with tests/ dir with a known positive and negative per rule ID.
 - [ ] Probability calibration for L1: Platt scaling or isotonic regression with threshold sweep to set operating point.- Utility coefficieant tuning: Currently coefficients are hand set. Collect labeled sets of tuples and fit coefficients against outcomes
 
 **Tier 2**

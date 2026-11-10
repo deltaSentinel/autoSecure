@@ -57,12 +57,13 @@ CREATE TABLE IF NOT EXISTS scans (
     host_id       TEXT,
     tag           TEXT,
     snapshot_path TEXT,
-    features_blob TEXT          -- JSON of features_ml, for delta computation
+    features_blob TEXT,          -- JSON of features_ml, for delta computation
+    raw_blob      TEXT           -- JSON of features_raw, for L2 baseline-diff (R16)
 );
 CREATE TABLE IF NOT EXISTS findings (
     id            INTEGER PRIMARY KEY,
     scan_id       INTEGER NOT NULL REFERENCES scans(id),
-    rule_id       TEXT,         -- R01..R10, or 'L1' for classifier-only
+    rule_id       TEXT,         -- R01..R16, or 'L1' for classifier-only
     layer         TEXT,         -- L0 / L1 / L2
     severity      REAL,
     evidence      TEXT,         -- human-readable proof chain
@@ -134,17 +135,18 @@ def perceive(snapshot_path):
 
 def insert_scan(con, snap, snapshot_path):
     cur = con.execute(
-        "INSERT INTO scans(ts, host_id, tag, snapshot_path, features_blob) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO scans(ts, host_id, tag, snapshot_path, features_blob, raw_blob) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (utcnow(), snap["meta"].get("host_id"), snap["meta"].get("tag"),
-         snapshot_path, json.dumps(snap["features_ml"], sort_keys=True)))
+         snapshot_path, json.dumps(snap["features_ml"], sort_keys=True),
+         json.dumps(snap["features_raw"], sort_keys=True)))
     return cur.lastrowid
 
 
 def previous_scan(con, scan_id, host_id):
     """Most recent PRIOR scan for the same host (belief state)."""
     row = con.execute(
-        "SELECT id, features_blob, ts FROM scans "
+        "SELECT id, features_blob, raw_blob, ts FROM scans "
         "WHERE id < ? AND (host_id = ? OR ? IS NULL) "
         "ORDER BY id DESC LIMIT 1",
         (scan_id, host_id, host_id)).fetchone()
@@ -593,6 +595,16 @@ def main():
     l0 = evaluate_reflex(snap["features_raw"])
     p_vuln, importances, l1_note = classify(snap["features_ml"], args.model)
     findings = diagnose(l0, p_vuln, importances, deltas)
+    if prev is not None and prev["raw_blob"] is not None:
+        try:
+            prev_raw = json.loads(prev["raw_blob"])
+            cur_suid = snap["features_raw"].get("filesystem", {}).get("suid_binaries")
+            prv_suid = prev_raw.get("filesystem", {}).get("suid_binaries")
+            if None not in (cur_suid, prv_suid) and cur_suid > prv_suid:
+                findings.append({"rule_id": "R16", "layer": "L2", "severity": 0.7,
+                                 "evidence": f"suid_binaries rose {prv_suid} -> {cur_suid} since previous scan"})
+        except json.JSONDecodeError:
+            pass # fail-static: corrupt history never blocks scan
     risk = composite_risk(findings, p_vuln)
     steps = plan(con, findings, alpha=args.alpha, beta=args.beta,
                  gamma=args.gamma)

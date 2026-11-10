@@ -202,7 +202,10 @@ def apply_effects(base_ml, base_raw, ids, rng):
     if "M10" in ids:
         ml["num_listening_ports"] += 1
     if "M11" in ids:
-        ml["risk_suid_binaries"] += rng.randint(1, 3)
+        bump = rng.randint(1, 3)
+        ml["risk_suid_binaries"] += bump
+        raw["filesystem"]["suid_binaries"] = \
+                raw["filesystem"].get("suid_binaries", 0) + bump
     return ml, raw
 
 

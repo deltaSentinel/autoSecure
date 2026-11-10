@@ -1,5 +1,8 @@
 # AutoSecure
 
+![CI](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+
 AI-driven vulnerability and misconfiguration detection for personal computing environments — a four-layer hybrid agent combining hand-written reflex rules with a learned classifier, developed as a semester project for AI-472.
 
 **Team:** Raymond Balesky — EE/CPE — 800389453 · Kayla Granger — Computer Science — 800425201
@@ -153,24 +156,24 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 ## Roadmap
 
 **Tier 1**
-- R13-R16 remediation paths: Each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
-- Pytest regression suite: Formalize echo test with tests/ dir with a known positive and negative per rule ID.
-- Probability calibration for L1: Platt scaling or isotonic regression with threshold sweep to set operating point.- Utility coefficieant tuning: Currently coefficients are hand set. Collect labeled sets of tuples and fit coefficients against outcomes
+- [ ] R13-R16 remediation paths: Each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
+- [ ] Pytest regression suite: Formalize echo test with tests/ dir with a known positive and negative per rule ID.
+- [ ] Probability calibration for L1: Platt scaling or isotonic regression with threshold sweep to set operating point.- Utility coefficieant tuning: Currently coefficients are hand set. Collect labeled sets of tuples and fit coefficients against outcomes
 
 **Tier 2**
-- Real-data retraining and hybrid datasets: After break-phase training see if hybrid real/synth changes results. Also allows for better setting of synth data generation
-- Smarter arbitration: Union and intersect only go so far. Try and set up a middle ground with a weighted fusion (severity-modulated thresholds).
-- Drift detection: "Posture trend line" to show how posture improves/degrades
-- Multi-host: Extend planner for multiple hosts
-- Second collector backend (dnf/rpm): Set up agnosticism for data collect 
-- Benchmark vs Scanner: Verify our results against Lynis or OpenSCAP to compare results and prove validity
+- [ ] Real-data retraining and hybrid datasets: After break-phase training see if hybrid real/synth changes results. Also allows for better setting of synth data generation
+- [ ] Smarter arbitration: Union and intersect only go so far. Try and set up a middle ground with a weighted fusion (severity-modulated thresholds).
+- [ ] Drift detection: "Posture trend line" to show how posture improves/degrades
+- [ ] Multi-host: Extend planner for multiple hosts
+- [ ] Second collector backend (dnf/rpm): Set up agnosticism for data collect 
+- [ ] Benchmark vs Scanner: Verify our results against Lynis or OpenSCAP to compare results and prove validity
 
 **Tier 3**
-- Adversarial Evasion Analysis: Study if peature perturbations can mask a signature
-- Active data collection: Agent chooses what is scanned next, given current belief state, which probe or target maximizes expected information gain about the fleet
-- Learned rule generation: Mine only-L1 samples features for predicates and propose rules automatically
-- Counterfactual explanations: For each L1 fire, compute the minimal feature change to flip the verdict
-- Distribution-shift monitoring: Measure synth -> real drift and track it as more real data is collected
+- [ ] Adversarial Evasion Analysis: Study if peature perturbations can mask a signature
+- [ ] Active data collection: Agent chooses what is scanned next, given current belief state, which probe or target maximizes expected information gain about the fleet
+- [ ] Learned rule generation: Mine only-L1 samples features for predicates and propose rules automatically
+- [ ] Counterfactual explanations: For each L1 fire, compute the minimal feature change to flip the verdict
+- [ ] Distribution-shift monitoring: Measure synth -> real drift and track it as more real data is collected
 
 ## References
 

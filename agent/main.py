@@ -560,7 +560,7 @@ def main():
     ap.add_argument("--db", default="memory.db", help="SQLite working memory")
     ap.add_argument("--model", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "train", "model.joblib"),
+        "..", "models", "model.joblib"),
         help="trained classifier (.joblib); absence => fail-static L1-off")
     ap.add_argument("--report", default=None,
                     help="report path (default: report_scan<N>.md)")

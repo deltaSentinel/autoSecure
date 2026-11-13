@@ -289,3 +289,22 @@ true-vuln         13         417
 - `risk_sudo_nopasswd`: 0.0543
 
 > Metrics are out-of-fold: every sample is scored by a model that never saw it during training. The exported model is trained on all samples afterward.
+
+## Probability calibration (Platt sigmoid, nested CV)
+
+| Scores | Brier (lower = better) |
+|---|---|
+| Uncalibrated RF votes | 0.0361 |
+| Calibrated (exported model) | 0.0254 |
+
+Reliability bins, calibrated (predicted vs observed):
+
+| bin center | observed vuln rate | n |
+|---|---|---|
+| 0.05 | 0.054 | 37 |
+| 0.15 | 0.067 | 104 |
+| 0.25 | 0.167 | 18 |
+| 0.35 | 1.000 | 1 |
+| 0.75 | 1.000 | 1 |
+| 0.85 | 0.909 | 22 |
+| 0.95 | 0.997 | 397 |

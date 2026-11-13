@@ -50,7 +50,7 @@ def read_file(path):
 
 def stat_octal(path):
     try:
-        return oct(os.stat(path).st_mode & 0o7777)
+        return format(os.stat(path).st_mode & 0o7777, "o")
     except Exception:
         return None
 

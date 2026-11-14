@@ -181,6 +181,8 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 2. **Relative paths assume project root** (except `eval_holdout.py`, which assumes `train/`).
 3. **Multiline pastes break `\` continuations**: treat every documented command as single-line.
 4. **`arb_experiment.py`'s agent-dir default** is `../agent` relative to `experiments/`; if the script moves again, a sed or manual change must be made.
+5. **Throwaway runs pollute `reports/scans/`.** The agent's `--report` defaults into the repo tree even when `--db` points at `/tmp`. Any smoke or test run must pass BOTH flags (`--db /tmp/x.db --report /tmp/x.md`); a fresh DB also restarts scan numbering at 1, so repeated throwaway runs accumulate near-duplicate `report_<host>_scan1_<stamp>.md` files. Cleaned once after the R13–R16 sweep (commit removing `report_synth-desk_scan*`).
+6. **`planner_sweep.py` `--out` default is cwd-relative** (`../reports/experiments`), while the canonical command in this README runs from the project root so the default writes OUTSIDE the repo. Always pass `--out reports/experiments` explicitly from the root, or run from `experiments/` where the default is correct.
 
 </details>
 
@@ -202,7 +204,7 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 ## Roadmap
 
 **Tier 1**
-- [ ] R13–R16 remediation paths: each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
+- [x] R13–R16 remediation paths: each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
 - [x] Pytest regression suite: formalized echo test with `tests/` dir, a known positive and negative per rule ID.
 - [ ] Utility coefficient tuning: currently hand-set. Collect labeled sets of tuples and fit coefficients against outcomes.
 

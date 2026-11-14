@@ -233,7 +233,7 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 
 ## License
 
-Released under the **MIT License** see [LICENSE](./LICENSE).
+Released under the **BSD-3-Clause License** see [LICENSE](./LICENSE).
 
 ## Responsible use
 

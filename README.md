@@ -54,11 +54,7 @@ uv venv && uv pip install scikit-learn joblib numpy pytest
 uv run python3 agent/main.py --snapshot <path/to/snapshot.json> --db agent/mem.db
 ```
 
-Mutation mode adds `--act` (requires root; refuses otherwise) and opens the interactive approval gate. The agent looks for `train/model.joblib` copy the trained model there after retraining:
-
-```bash
-cp models/model.joblib train/model.joblib
-```
+Mutation mode adds `--act` (requires root; refuses otherwise)
 
 The full pipeline (dataset generation → training → experiments) is documented in [Canonical commands](#canonical-commands) below.
 

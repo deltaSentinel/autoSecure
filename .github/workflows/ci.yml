@@ -6,9 +6,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Cancel superseded runs on the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: no job here needs write access
+permissions:
+  contents: read
+
 jobs:
+  # Fast checks: run on every PR and push
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,10 +32,82 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
+      - name: Lint (ruff)  # remove if you don't want linting yet
+        run: |
+          uvx ruff check .
+          uvx ruff format --check .
+
       - name: Smoke test (imports + agent loads)
         run: |
           uv run python3 -c "import agent"
           uv run python3 agent/main.py --help
 
+      # Blocking, no `|| echo`: a red test job must mean failing tests.
       - name: Run unit tests
-        run: uv run pytest -q || echo "no tests / tests failing (non-blocking)"
+        run: uv run pytest -q
+
+  # Determinism guarantees: enforce the README's invariants at PR time
+  reproducibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync
+
+      # Regenerate into a FRESH directory, never into the committed data/synth/:
+      # the generator appends, so regenerating into a populated directory would
+      # duplicate snapshots and invalidate out-of-fold CV (see README).
+      - name: Regenerate synthetic dataset (seed 7) into clean directory
+        run: uv run python3 experiments/gen_dataset.py --dataset data/synth_ci --seed 7
+
+      # README invariant: regenerated set MUST be exactly 580 snapshots
+      - name: Assert snapshot count is 580
+        run: |
+          count=$(find data/synth_ci -type f | wc -l)
+          echo "Generated snapshots: $count"
+          if [ "$count" -ne 580 ]; then
+            echo "::error::Expected 580 snapshots, got $count — duplication or missing data invalidates out-of-fold CV"
+            exit 1
+          fi
+
+      - name: Train model on regenerated data
+        run: uv run python3 train/train.py --dataset data/synth_ci --out models_ci
+
+      # Schema drift guard: retraining on the deterministic dataset must export
+      # a feature catalog byte-identical to the committed one. If this fails,
+      # someone changed the feature vector and every existing model.joblib /
+      # dataset pairing is invalidated.
+      - name: Assert feature_keys.json is unchanged
+        run: |
+          diff -u models/feature_keys.json models_ci/feature_keys.json \
+            || { echo "::error::feature_keys.json drifted from the committed schema"; exit 1; }
+
+      # Round-trip check: a freshly trained model must load in the agent harness
+      - name: Fresh model loads into agent
+        run: |
+          cp models_ci/model.joblib train/model.joblib
+          uv run python3 -c "
+          import joblib
+          model = joblib.load('train/model.joblib')
+          assert hasattr(model, 'predict'), 'loaded object is not a working classifier'
+          print('Fresh model loads OK:', type(model).__name__)
+          "
+
+      # Keep the generated artifacts out of the published job summary noise,
+      # but upload them for debugging when something drifts
+      - name: Upload regenerated artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regeneration-debug
+          path: |
+            models_ci/
+          retention-days: 5

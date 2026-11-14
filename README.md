@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml/badge.svg)](https://github.com/deltaSentinel/autoSecure/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-orange.svg)](./LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue)](./SECURITY.md)
 
 AI-driven vulnerability and misconfiguration detection for personal computing environments — a four-layer hybrid agent combining hand-written reflex rules with a learned classifier. Developed as a semester project for AI-472.
@@ -38,8 +38,6 @@ The threshold-sweep result is the core architectural claim: the hand-written rul
 | L1 — Classifier | Random Forest, 25-feature vector | Model-based |
 | L2 — Diagnostician | Merges L0+L1 findings, drift attribution vs. prior scans | Internal state |
 | L3 — Planner | Utility-ranked fixes: `severity − disruption − fp_penalty` | Utility-based |
-
-> **Note to you:** this embed assumes you rename `Presentations/Images/Diagrams/architecture.drawio(2).png` → `architecture.png` — spaces and parentheses in filenames break Markdown image links (or require ugly URL encoding). Suggested renames for all four diagrams and four graphs: lowercase, hyphens only (e.g. `f1-across-decision-thresholds.png` is already correct).
 
 **Safety invariants:** read-only unless `--act` is passed; `--act` requires root and hard-refuses otherwise (no silent degradation); every finding is evidence-chained; operator rejections persist and lower that rule's utility in future runs.
 

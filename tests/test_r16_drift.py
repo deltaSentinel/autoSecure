@@ -18,6 +18,7 @@ def _scan(snapshot, db):
         [sys.executable, str(ROOT / "agent" / "main.py"),
          "--snapshot", str(ROOT / "tests" / "fixtures" / snapshot),
          "--db", str(db)],
+         #"--report", str(tmp_path / "r16_report.md")#/
         cwd=ROOT, check=True, capture_output=True, text=True)
     assert r.returncode == 0, \
             f"agent exited {r.returncode}\n--- stderr ---\n{r.stderr}\n--- stdout ---\n{r.stdout}"

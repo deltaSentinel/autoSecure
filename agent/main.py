@@ -43,8 +43,9 @@ import sqlite3
 import subprocess
 import sys
 from getpass import getpass
+from datetime import datetime
 
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.2.1"
 
 # ===========================================================================
 # SCHEMA / WORKING MEMORY
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS actions (
 
 AGENT_BACKUP_DIR = "/var/lib/autosecure/agent-backups"   # root runs; see --act
 
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 def utcnow():
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -563,7 +565,7 @@ def main():
         "..", "models", "model.joblib"),
         help="trained classifier (.joblib); absence => fail-static L1-off")
     ap.add_argument("--report", default=None,
-                    help="report path (default: report_scan<N>.md)")
+                    help="report path (default: reports/scans/report_<host>_scan<N>_<timestamp>.md)")
     ap.add_argument("--act", action="store_true",
                     help="ENABLE MUTATIONS: enter interactive approval gate")
     ap.add_argument("--yes-all", action="store_true",
@@ -619,8 +621,15 @@ def main():
         findings_rows.setdefault(f["rule_id"], cur.lastrowid)
     con.commit()
 
+    host = snap["meta"].get("host_id", "unknown")
+
     # ---- Actuators: report (always), execution (gated) -------------------
-    report_path = args.report or f"report_scan{scan_id}.md"
+    scans_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir,
+        "reports", "scans"))
+    os.makedirs(scans_dir, exist_ok=True)
+    report_path = args.report or os.path.join(
+            scans_dir, f"report_{host}_scan{scan_id}_{STAMP}.md")
     write_report(report_path, snap, scan_id, findings, p_vuln, deltas,
                  delta_note, risk, steps, l1_note)
 

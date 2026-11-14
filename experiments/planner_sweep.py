@@ -11,11 +11,14 @@ Findings:
   - N/A-action steps are tier-quarantined below action-bearing steps
     regardless of utility (sort key (action is None, -utility)).
 """
-import argparse, csv, itertools, os, sqlite3, sys
+import argparse, csv, itertools, os, sqlite3, sys, shutil
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 os.pardir, "agent"))
 from main import plan, REFLEX_RULES, REMEDIATION_KB   # noqa: E402
+
+from datetime import datetime
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 ALPHA = 1.0
 BETAS  = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
@@ -64,7 +67,10 @@ HISTORIES = {
 
 def run(out_dir):
     os.makedirs(out_dir, exist_ok=True)
+    hist = os.path.join(out_dir, "history")
+    os.makedirs(hist, exist_ok=True)
     csv_path = os.path.join(out_dir, "planner_sweep.csv")
+    hist_csv = os.path.join(hist, f"planner_sweep_{STAMP}.csv")
     per_rule = {}          # (rule, history) -> {(beta,gamma): utility}
     rows_written = 0
     with open(csv_path, "w", newline="") as fh:
@@ -132,9 +138,12 @@ def run(out_dir):
                  "steps by construction (verified per cell in CSV col "
                  "na_quarantine_held).\n")
     print(f"[+] report -> {rep_path}")
+    shutil.copy2(csv_path, os.path.join(hist, f"planner_sweep_{STAMP}.csv"))
+    shutil.copy2(rep_path, os.path.join(hist, f"planner_report_{STAMP}.md"))
+    print(f"[+] history -> {hist}/ (*_{STAMP})")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(os.pardir, "models"))
+    ap.add_argument("--out", default=os.path.join(os.pardir, "reports", "experiments"))
     run(ap.parse_args().out)

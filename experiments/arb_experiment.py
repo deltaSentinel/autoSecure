@@ -36,10 +36,14 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import sys
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
+
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 try:
     import joblib
@@ -155,7 +159,9 @@ def detector_metrics(y_true, y_pred, y_prob=None):
 def main():
     ap = argparse.ArgumentParser(description="AutoSecure arbitration experiment")
     ap.add_argument("--dataset", default="../dataset")
-    ap.add_argument("--out", default=".")
+    ap.add_argument("--out", default=os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir,
+        "reports", "experiments")))
     ap.add_argument("--threshold", type=float, default=0.5,
                     help="L1 firing threshold")
     ap.add_argument("--folds", type=int, default=5)
@@ -322,7 +328,16 @@ def main():
     for name, m in detectors.items():
         print(f"  {name:<16} P={m['precision']:.3f} R={m['recall']:.3f} "
               f"F1={m['f1']:.3f}")
-
+    
+    hist = os.path.join(args.out, "history")
+    os.makedirs(hist, exist_ok=True)
+    for fname in ("arbitration_report.md", "arbitration_results.json",
+                  "threshold_sweep.csv"):
+        src = os.path.join(args.out, fname)
+        if os.path.exists(src):
+            stem, ext = os.path.splitext(fname)
+            shutil.copy2(src, os.path.join(hist, f"{stem}_{STAMP}{ext}"))
+    print(f"[+] history -> {hist}/ (*_{STAMP})")
 
 if __name__ == "__main__":
     main()

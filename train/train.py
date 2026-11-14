@@ -31,9 +31,13 @@ import glob
 import json
 import os
 import sys
+import shutil
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
+
+STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 try:
     import joblib
@@ -371,23 +375,31 @@ def main():
     imp_path = os.path.join(args.out, "importances.csv")
     importances = export_importances(base, feature_keys, imp_path)
 
+    rep_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir,
+        "reports", "training"))
+    os.makedirs(rep_dir, exist_ok=True)
+    report_path = os.path.join(rep_dir, "eval_report.md")
+
     # 6. Written evaluation report (slide-ready tables)
-    write_eval_report(os.path.join(args.out, "eval_report.md"),
+    write_eval_report(report_path,
                       len(X), feature_keys, args.model, m, cm, cmp_rows,
                       tags, y, y_pred, importances)
 
     ev, raw_p, cal_p = calibration_evidence(X, y, skf, args.seed)
-    append_calibration_report(os.path.join(args.out, "eval_report.md"),
-                              ev, y, cal_p)
+    append_calibration_report(report_path, ev, y, cal_p)
+
+    hist = os.path.join(rep_dir, "history")
+    os.makedirs(hist, exist_ok = True)
+    shutil.copy2(report_path, os.path.join(hist, f"eval_report_{STAMP}.md"))
+    print(f"[+] history -> {hist}/eval_report_{STAMP}.md")
 
     print("\n=== Summary (out-of-fold) ===")
     print(classification_report(y, y_pred, target_names=["clean",
                                                          "vulnerable"],
                                 zero_division=0))
     print(f"ROC-AUC: {m['roc_auc']:.3f}")
-    print("\n[.] next: drop model.joblib + feature_keys.json where "
-          "agent/main.py looks for them, then rerun the agent on a known-"
-          "vulnerable snapshot and confirm L1 lights up.")
+    print("\n[.] next: uv run python3 agent/main.py --snapshot tests/fixtures/scan_m11.json --db /tmp/smoke.db (expect L1 = 0.9 and R16 silence on scan #1")
 
 
 if __name__ == "__main__":

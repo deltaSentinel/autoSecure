@@ -80,8 +80,8 @@ def run(out_dir):
                     "head_rule", "r06_utility", "na_quarantine_held"])
         for sname, sfn in SCENARIOS.items():
             findings = sfn()
-            for hname, hist in HISTORIES.items():
-                con = seed_con(hist)
+            for hname, hist_rows in HISTORIES.items():
+                con = seed_con(hist_rows)
                 for beta, gamma in itertools.product(BETAS, GAMMAS):
                     steps = plan(con, findings, alpha=ALPHA,
                                  beta=beta, gamma=gamma)
@@ -126,17 +126,23 @@ def run(out_dir):
             penalty = row["rej"] / row["total"] if row["total"] else 0.0
             analytic = (ALPHA * sev - 0.5 * penalty) / disrupt
             # measured: first beta in BETAS where utility < 0 at gamma=0.5
-            cross = next(((b, grid[(b, 0.5)]) for b in BETAS
-                          if (b, 0.5) in grid and grid[(b, 0.5)] < 0), None)
-            if cross:
-                fh.write(f"| {rid} | {hname} | beta>{cross[0]} (U={cross[1]}) "
-                         f"| {analytic:.2f} |\n")
+            uvals = [(b, grid[(b, 0.5)]) for b in BETAS if (b, 0.5) in grid]
+            neg = next((x for x in uvals if x[1] < 0), None)
+            if neg:
+                pos = max((x for x in uvals if x[1] >= 0),
+                          key=lambda x: x[0], default=None)
+                bracket = (f"({pos[0]}, {neg[0]}]" if pos else f"<= {neg[0]}")
+                fh.write(f"| {rid} | {hname} | beta in {bracket} "
+                         f"(U={neg[1]} at {neg[0]}) | {analytic:.2f} |\n")
         fh.write("\n## Notes\n\n"
                  "- plan() returns all steps; 'regimes' are utility sign "
                  "crossings, not membership changes.\n"
                  "- N/A-action steps are quarantined below action-bearing "
                  "steps by construction (verified per cell in CSV col "
                  "na_quarantine_held).\n")
+        fh.write("- Measured column is a grid bracket: the true crossing is "
+                 "within it; the analytic column (exact, U linear in beta) "
+                 "is the precise value.\n")
     print(f"[+] report -> {rep_path}")
     shutil.copy2(csv_path, os.path.join(hist, f"planner_sweep_{STAMP}.csv"))
     shutil.copy2(rep_path, os.path.join(hist, f"planner_report_{STAMP}.md"))

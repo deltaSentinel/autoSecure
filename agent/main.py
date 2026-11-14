@@ -353,6 +353,36 @@ REMEDIATION_KB = {
             "Stop cleartext FTP exposure"),
     "R12": ("systemctl disable --now snmpd", "systemctl enable --now snmpd", 0.5,
             "Stop SNMP exposure"),
+    "R13": ("sed -i 's/^\\s*PermitRootLogin.*/PermitRootLogin no/' "
+            "/etc/ssh/sshd_config && systemctl reload ssh",
+            "sed -i 's/^\\s*PermitRootLogin.*/PermitRootLogin yes/' "
+            "/etc/ssh/sshd_config && systemctl reload ssh", 0.4,
+            "Block direct root SSH login; verify an admin user exists "
+            "BEFORE approving (lock-out risk); rollback restores"),
+    "R14": ("find /tmp /var/tmp -xdev -type d -perm -0002 ! -perm -1000 "
+            "-exec stat -c '%n' {} + > "
+            "/var/lib/autosecure/agent-backups/sticky_dirs.txt && "
+            "find /tmp /var/tmp -xdev -type d -perm -0002 ! -perm -1000 "
+            "-exec chmod +t {} +",
+            "while read -r d; do chmod -t \"$d\"; done < "
+            "/var/lib/autosecure/agent-backups/sticky_dirs.txt", 0.4,
+            "Add sticky bit to world-writable /tmp,//var/tmp dirs (same "
+            "scope as collector check); dir list saved for rollback — "
+            "do not re-run without rolling back (list is overwritten)"),
+    "R15": ("find /etc -xdev -type f -perm -0002 "
+            "-exec stat -c '%a %n' {} + > "
+            "/var/lib/autosecure/agent-backups/ww_etc_modes.txt && "
+            "find /etc -xdev -type f -perm -0002 -exec chmod o-w {} +",
+            "while read -r m p; do chmod \"$m\" \"$p\"; done < "
+            "/var/lib/autosecure/agent-backups/ww_etc_modes.txt", 0.3,
+            "Strip world-write from /etc files; prior modes saved for "
+            "rollback — do not re-run without rolling back (list "
+            "overwritten)"),
+    "R16": (None, None, None,
+            "SUID drift: enumerate with `find /usr /bin /sbin /lib "
+            "-xdev -perm -4000 -ls` (same scope as collector), diff "
+            "against baseline, investigate added binaries manually; "
+            "agent never auto-deletes (count-only evidence — fail-static)"),
     "L1": (None, None, None,
            "Classifier-only finding: investigate compound configuration manually"),
 }

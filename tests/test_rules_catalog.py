@@ -55,6 +55,11 @@ def test_clean_baseline_fires_nothing():
     fired = _evaluate(CLEAN)
     assert fired == [], f"FP REGRESSION on clean baseline: {fired}"
 
+def test_kb_covers_every_rule():
+    rule_ids = {r[0] for r in CATALOG}
+    assert rule_ids | {"R16"} <= set(main.REMEDIATION_KB), (
+            "KB gaps: " + ", ".join(sorted(rules_ids | {"R16"} - set(main.REMEDIATION_KB))))
+
 @pytest.mark.parametrize("rule_id", list(POSITIVE_CASES))
 def test_rule_fires_on_positive(rule_id):
     assert rule_id in _evaluate(POSITIVE_CASES[rule_id]), f"DEAD RULE: {rule_id} did not fire"

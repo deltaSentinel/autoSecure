@@ -725,12 +725,20 @@ def main():
     host = snap["meta"].get("host_id", "unknown")
 
     # ---- Actuators: report (always), execution (gated) -------------------
+
+    def resolve_report_path(target):
+        """Directory arg => auto-named file inside it; else use as-is."""
+        if target and os.path.isdir(target):
+            return os.path.join(
+                target, f"report_{host}_scan{scan_id}_{STAMP}.md")
+        return target or os.path.join(
+            scans_dir, f"report_{host}_scan{scan_id}_{STAMP}.md")
+
     scans_dir = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), os.pardir,
         "reports", "scans"))
     os.makedirs(scans_dir, exist_ok=True)
-    report_path = args.report or os.path.join(
-            scans_dir, f"report_{host}_scan{scan_id}_{STAMP}.md")
+    report_path = resolve_report_path(args.report)
     write_report(report_path, snap, scan_id, findings, p_vuln, deltas,
                  delta_note, risk, steps, l1_note)
 
@@ -744,7 +752,7 @@ def main():
         "findings": [{"rule": f["rule_id"], "layer": f["layer"],
                       "severity": f["severity"]} for f in findings],
         "planned_steps": len(steps),
-        "report": report_path,
+        "report": os.path.abspath(report_path),
         "verdict": "healthy" if risk < 0.5 else "action required",
     }
     print(json.dumps(result, indent=2))

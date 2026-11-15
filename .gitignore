@@ -7,4 +7,4 @@ __pycache__/
 demo_*.txt
 *.swp
 report_scan*.md
-
+reports/**/history/

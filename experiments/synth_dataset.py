@@ -134,8 +134,10 @@ PROFILES = {
 
 def clean_baseline(rng, profile):
     prof = PROFILES[profile]
+    permit_root_login = rng.choice(("no", "prohibit-password"))
     ml = {
-        "risk_ssh_permit_root_login": 0,
+        "risk_ssh_permit_root_login":
+            1 if permit_root_login == "prohibit-password" else 0,
         "risk_ssh_password_auth": int(rng.random() < 0.3),  # some allow it
         "risk_ssh_empty_passwords": 0,
         "risk_world_writable_etc_files": 0,
@@ -163,6 +165,7 @@ def clean_baseline(rng, profile):
         "num_running_services": rng.randint(*prof["num_running_services"]),
     }
     raw = deep_copy(CLEAN_RAW_TEMPLATE)
+    raw["ssh"]["permit_root_login"] = permit_root_login
     if ml["risk_ssh_password_auth"]:
         raw["ssh"]["password_authentication"] = "yes"
     if ml["risk_sudo_nopasswd"]:

@@ -22,6 +22,8 @@ CLEAN = {
 
 EXPECTED_CATALOG = {f"R{i:02d}" for i in range(1, 16)} | {"R16"}
 
+DYNAMICALLY_REMEDIATED = {"R04"}
+
 def _merged(**overrides):
     raw = {k: dict(v) if isinstance(v, dict) else v for k, v in CLEAN.items()}
     for section, kv in overrides.items():
@@ -60,8 +62,9 @@ def test_clean_baseline_fires_nothing():
 
 def test_kb_covers_every_rule():
     rule_ids = {r[0] for r in CATALOG}
-    assert rule_ids | {"R16"} <= set(main.REMEDIATION_KB), (
-            "KB gaps: " + ", ".join(sorted(rule_ids | {"R16"} - set(main.REMEDIATION_KB))))
+    expected = (rule_ids | {"R16"}) - DYNAMICALLY_REMEDIATED
+    assert expected <= set(main.REMEDIATION_KB), (
+        "KB gaps: " + ", ".join(sorted(expected - set(main.REMEDIATION_KB))))
 
 def test_catalog_ids_contiguous_and_complete():
     ids = {r[0] for r in main.REFLEX_RULES}

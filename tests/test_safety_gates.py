@@ -210,4 +210,3 @@ def test_default_run_never_enters_approval_gate(run_dir, finding_snapshot):
         f"stdout was: {r.stdout!r}"
     )
     assert "approval gate closed" not in r.stdout
-

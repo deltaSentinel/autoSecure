@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS actions (
 """
 
 AGENT_BACKUP_DIR = "/var/lib/autosecure/agent-backups"   # root runs; see --act
+UID0_PASSWD_BACKUP = os.path.join(AGENT_BACKUP_DIR, "uid0_passwd.txt")
 
 STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -332,16 +333,24 @@ REMEDIATION_KB = {
     "R03": ("echo 'Lock affected empty-password accounts' ; "
             "passwd -l $(awk -F: '$2==\"\"{print $1}' /etc/shadow | tr '\\n' ' ')",
             None, 0.5, "Lock accounts with empty password fields"),
-    "R04": ("userdel backdoor01", "useradd -o -u 0 -g 0 -M backdoor01", 0.7,
-            "Remove unauthorized UID-0 account"),
+    # "R04" intentionally absent: action/rollback are GENERATED from the
+    # observed users_uid0_extra list (see build_uid0_remediation);
+    # plan() intercepts R04 before the KB lookup. Do not re-add a
+    # hardcoded entry here, that was the original defect.
     "R05": ("sed -i 's/^\\s*PermitEmptyPasswords.*/PermitEmptyPasswords no/' "
             "/etc/ssh/sshd_config && systemctl reload ssh",
             "sed -i 's/^\\s*PermitEmptyPasswords.*/PermitEmptyPasswords yes/' "
             "/etc/ssh/sshd_config && systemctl reload ssh", 0.4,
-            "Hardens sshd; rollback restores prior config"),
-    "R06": ("rm -f /etc/sudoers.d/* && "
-            "sed -i '/NOPASSWD/d' /etc/sudoers", None, 0.8,
-            "Strip NOPASSWD grants — review before approving (breaks automation)"),
+            "Hardens sshd; WARNING: rollback re-enables PermitEmptyPasswords "
+            "and reopens the vulnerability - review before using"),
+    "R06": ("cp -a /etc/sudoers /etc/sudoers.d "
+            "/var/lib/autosecure/agent-backups/sudoers_$$_stamp && "
+            "sed -i.bak '/NOPASSWD/d' /etc/sudoers && "
+            "visudo -cf /etc/sudoers >/dev/null || cp /etc/sudoers.bak /etc/sudoers",
+            "restore-from the sudoers_stamp backup directory (see manifest)",
+            0.5,
+            "Strip NOPASSWD grants; sudoers.d drop-ins are preserved as a "
+            "coherent backup dir, not deleted"),
     "R07": ("sed -i 's/^\\s*PasswordAuthentication.*/PasswordAuthentication no/' "
             "/etc/ssh/sshd_config && systemctl reload ssh",
             "sed -i 's/^\\s*PasswordAuthentication.*/PasswordAuthentication yes/' "
@@ -395,6 +404,41 @@ REMEDIATION_KB = {
            "Classifier-only finding: investigate compound configuration manually"),
 }
 
+def build_uid0_remediation(raw):
+    """R04: generate action/rollback from the observed UID-0 accounts."""
+    offenders = sorted(set(raw.get("accounts", {}).get("users_uid0_extra") or []))
+    if not offenders:
+        return None, None
+    names = " ".join(offenders)
+    action = "userdel " + names
+    rollback = "for u in " + names + '; do useradd -o -u 0 -g 0 -M "$u"; done'
+    return action, rollback
+
+def build_uid0_remediation(raw):
+    """R04: action/rollback generated from the OBSERVED UID-0 accounts.
+
+    The action snapshots each offender's passwd line to
+    UID0_PASSWD_BACKUP before deletion; the rollback recreates the
+    accounts from that file with uid/gid/home/shell intact.
+    Like R14/R15, the file is overwritten each run: do not re-run
+    without rolling back first.
+    """
+    offenders = sorted(set(raw.get("accounts", {}).get("users_uid0_extra") or []))
+    if not offenders:
+        return None, None
+    names = " ".join(offenders)
+    action = (
+        f"getent passwd {names} > {UID0_PASSWD_BACKUP} && "
+        f"for u in {names}; do userdel \"$u\"; done"
+    )
+    rollback = (
+        f"while IFS=: read -r nm _pw uid gid cmt home shell; do "
+        f"useradd -o -u \"$uid\" -g \"$gid\" -c \"$cmt\" "
+        f"-d \"$home\" -s \"$shell\" -M \"$nm\"; "
+        f"done < {UID0_PASSWD_BACKUP}"
+    )
+    return action, rollback
+
 # Utility:  U(a) = ALPHA*severity - BETA*disruptiveness - GAMMA*fp_penalty
 ALPHA_DEFAULT, BETA_DEFAULT, GAMMA_DEFAULT = 1.0, 0.5, 0.75
 
@@ -416,8 +460,14 @@ def plan(con, findings, alpha=ALPHA_DEFAULT, beta=BETA_DEFAULT,
     steps = []
     for f in findings:
         rid = f["rule_id"]
-        action, rollback, disrupt, rationale = REMEDIATION_KB.get(
-            rid, (None, None, None, "no remediation registered"))
+        if rid == "R04":
+            action, rollback = build_uid0_remediation(f.get("_raw") or {})
+            disrupt, rationale = 0.7, (action, rollback, 0.7,
+                        "Remove unauthorized UID-0 accounts "
+                        "(generated from observed list)")
+        else:
+            action, rollback, disrupt, rationale = REMEDIATION_KB.get(
+                rid, (None, None, None, "no remediation registered"))
         penalty = fp_penalty(con, rid)
         utility = round(alpha * f["severity"]
                         - beta * (disrupt or 0.0)
@@ -448,18 +498,19 @@ def composite_risk(findings, p_vuln):
 # ===========================================================================
 # APPROVAL GATE + EXECUTION (invariants 1, 2, 4)
 # ===========================================================================
+def _touched_files(action):
+    """Bare file-path tokens in the action — backup candidates."""
+    return [t for t in action.split() if t.startswith("/") and os.path.isfile(t)]
 
 def _backup_paths(action):
-    """Snapshot any config files the action touches (invariant 2)."""
+    """Snapshot the files the action touches (invariant 2)."""
     os.makedirs(AGENT_BACKUP_DIR, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     backed = []
-    for token in action.split():
-        if token.startswith("/") and os.path.isfile(token):
-            dest = os.path.join(AGENT_BACKUP_DIR, f"{stamp}_"
-                                + os.path.basename(token))
-            shutil.copy2(token, dest)
-            backed.append(f"{token} -> {dest}")
+    for m in _touched_files(action):
+        dest = os.path.join(AGENT_BACKUP_DIR, f"{stamp}_{os.path.basename(m)}")
+        shutil.copy2(m, dest)
+        backed.append(f"{m} -> {dest}")
     return backed
 
 
@@ -483,11 +534,21 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
             "ORDER BY id DESC LIMIT 1",
             (scan_id, step["action"])).fetchone()["id"]
 
+        candidates = _touched_files(step["action"])
+        if step["rollback"]:
+            rollback_disp = step["rollback"]
+        elif candidates:
+            rollback_disp = (f"(file backup taken at execution: "
+                             f"{', '.join(candidates)})")
+        else:
+            rollback_disp = ("*** NONE — no rollback command and no backup "
+                             "candidate; approve only if manually reversible")
+
         print(f"\n--- Step {idx + 1}/{len(steps)} | utility {step['utility']} "
               f"| disruptiveness {step['disruptiveness']} ---")
         print(f"    {step['rule_id']}: {step['evidence']}")
         print(f"    ACTION  : {step['action']}")
-        print(f"    ROLLBACK: {step['rollback'] or '(file backup taken)'}")
+        print(f"    ROLLBACK: {rollback_disp}")  # keep your existing label
 
         if not yes_all:
             decision = input("    Approve and execute? [y/N/a(ll)/q] ").strip().lower()
@@ -527,9 +588,11 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
                 "reason, ts) VALUES (?, 'approve', ?, 'executed', ?)",
                 (finding_id, step["rule_id"], utcnow()))
             con.commit()
+            tail = step["rollback"] or (
+                "; ".join(backups) if backups
+                else "NONE — manual restore required")
             print(f"    [{'+' if ok else '!'}] "
-                  f"{'executed' if ok else 'FAILED'} — rollback on file:"
-                  f"\n          {step['rollback'] or 'see backup above'}")
+                  f"{'executed' if ok else 'FAILED'} — rollback: {tail}")
             approved_any = approved_any or ok
         except Exception as e:
             con.execute("UPDATE actions SET state='failed', output=? WHERE id=?",

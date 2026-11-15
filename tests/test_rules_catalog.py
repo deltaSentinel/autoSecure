@@ -20,6 +20,8 @@ CLEAN = {
                  "listening_ports": [22]},
 }
 
+EXPECTED_CATALOG = {f"R{i:02d}" for i in range(1, 16)} | {"R16"}
+
 def _merged(**overrides):
     raw = {k: dict(v) if isinstance(v, dict) else v for k, v in CLEAN.items()}
     for section, kv in overrides.items():
@@ -33,6 +35,7 @@ POSITIVE_CASES = {
     "R04": _merged(accounts={"users_uid0_extra": ["backdoor"]}),
     "R05": _merged(ssh={"permit_empty_passwords": "yes"}),
     "R06": _merged(accounts={"sudo_nopasswd_entries": ["user ALL=(ALL) NOPASSWD:ALL"]}),
+    "R07": _merged(ssh={"password_authentication": "yes"}),
     "R08": _merged(network_defense={"firewall_active": False}),         # is False — literal required
     "R09": _merged(login_defs={"pass_min_len": 5}),                     # < 8
     "R10": _merged(updating={"unattended_upgrades_enabled": False}),     # is False — literal required
@@ -58,7 +61,13 @@ def test_clean_baseline_fires_nothing():
 def test_kb_covers_every_rule():
     rule_ids = {r[0] for r in CATALOG}
     assert rule_ids | {"R16"} <= set(main.REMEDIATION_KB), (
-            "KB gaps: " + ", ".join(sorted(rules_ids | {"R16"} - set(main.REMEDIATION_KB))))
+            "KB gaps: " + ", ".join(sorted(rule_ids | {"R16"} - set(main.REMEDIATION_KB))))
+
+def test_catalog_ids_contiguous_and_complete():
+    ids = {r[0] for r in main.REFLEX_RULES}
+    assert ids == EXPECTED_CATALOG - {"R16"}, (
+        f"catalog drift: extra={sorted(ids - (EXPECTED_CATALOG - {'R16'}))} "
+        f"missing={sorted((EXPECTED_CATALOG - {'R16'}) - ids)}")
 
 @pytest.mark.parametrize("rule_id", list(POSITIVE_CASES))
 def test_rule_fires_on_positive(rule_id):

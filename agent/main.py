@@ -183,6 +183,8 @@ REFLEX_RULES = [
      1.0, "SSH PermitEmptyPasswords enabled"),
     ("R06", lambda r: bool(r.get("accounts", {}).get("sudo_nopasswd_entries")),
      0.8, "NOPASSWD entries in sudoers"),
+    ("R07", lambda r: str(r.get("ssh", {}).get("password_authentication")).lower() == "yes",
+     0.7, "SSH password authentication enabled - brute-force exposure surface"),
     ("R08", lambda r: r.get("network_defense", {}).get("firewall_active") is False,
      0.8, "No active firewall backend"),
     ("R09", lambda r: r.get("login_defs", {}).get("pass_min_len") is not None
@@ -340,6 +342,12 @@ REMEDIATION_KB = {
     "R06": ("rm -f /etc/sudoers.d/* && "
             "sed -i '/NOPASSWD/d' /etc/sudoers", None, 0.8,
             "Strip NOPASSWD grants — review before approving (breaks automation)"),
+    "R07": ("sed -i 's/^\\s*PasswordAuthentication.*/PasswordAuthentication no/' "
+            "/etc/ssh/sshd_config && systemctl reload ssh",
+            "sed -i 's/^\\s*PasswordAuthentication.*/PasswordAuthentication yes/' "
+            "/etc/ssh/sshd_config && systemctl reload ssh", 0.4,
+            "Disable SSH password auth; verify key-based access works "
+            "BEFORE approving (lock-out risk); rollback restores"),
     "R08": ("ufw enable", "ufw disable", 0.7,
             "Enable firewall; may disrupt active listeners"),
     "R09": ("sed -i 's/^\\s*PASS_MIN_LEN.*/PASS_MIN_LEN\\t12/' /etc/login.defs",

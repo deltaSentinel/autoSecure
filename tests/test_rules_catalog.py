@@ -72,6 +72,16 @@ def test_catalog_ids_contiguous_and_complete():
         f"catalog drift: extra={sorted(ids - (EXPECTED_CATALOG - {'R16'}))} "
         f"missing={sorted((EXPECTED_CATALOG - {'R16'}) - ids)}")
 
+def test_kb_every_entry_reversible_or_flagged():
+    """Issue acceptance criterion: every REMEDIATION_KB entry with an
+    action must either carry a working rollback command or be explicitly
+    flagged IRREVERSIBLE in its rationale."""
+    for rid, (action, rollback, disrupt, rationale) in main.REMEDIATION_KB.items():
+        if action is None:
+            continue    # manual-review-only entries (R16, L1)
+        assert rollback is not None or "irreversible" in rationale.lower(), \
+            f"{rid}: rollback=None requires an explicit IRREVERSIBLE flag"
+
 @pytest.mark.parametrize("rule_id", list(POSITIVE_CASES))
 def test_rule_fires_on_positive(rule_id):
     assert rule_id in _evaluate(POSITIVE_CASES[rule_id]), f"DEAD RULE: {rule_id} did not fire"

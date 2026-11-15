@@ -12,9 +12,9 @@ Full 4-layer agent over the collector snapshots:
 SAFETY INVARIANTS (enforced here, not by convention):
     1. READ-ONLY BY DEFAULT. Nothing is mutated on the target unless
        --act is passed AND the operator approves each step interactively.
-    2. REVERSIBILITY. Every mutating action is drawn from the remediation
-       KB, which carries a pre-registered rollback command. Rollback state
-       is persisted before any action executes.
+    2. REVERSIBILITY. Every mutating action is drawn from the remediation KB, which carries a pre-
+       registered rollback command or an explicit IRREVERSIBLE flag surfaced at the approval gate.
+       Rollback state is persisted before any action executes.
     3. FAIL-STATIC. Missing model, missing snapshot fields, or unreadable
        features degrade the run and are REPORTED — the agent never guesses.
     4. AUDITABILITY. Every decision, approval, rejection, and execution
@@ -328,11 +328,22 @@ REMEDIATION_KB = {
     "R01": ("systemctl disable --now inetutils-inetd",
             "systemctl enable --now inetutils-inetd", 0.6,
             "Disable telnet; rollback re-enables"),
-    "R02": ("chmod 0640 /etc/shadow", None, 0.1,   # backup taken below
-            "Restore restrictive /etc/shadow mode"),
-    "R03": ("echo 'Lock affected empty-password accounts' ; "
-            "passwd -l $(awk -F: '$2==\"\"{print $1}' /etc/shadow | tr '\\n' ' ')",
-            None, 0.5, "Lock accounts with empty password fields"),
+    "R02": ("chmod 0640 /etc/shadow", None, 0.1,
+            "Restore restrictive /etc/shadow mode — IRREVERSIBLE per "
+            "policy: restoring the insecure mode would re-create the "
+            "finding; pre-mutation backup is taken automatically and is "
+            "the recovery artifact"),
+    "R03": ("awk -F: '$2==\"\"{print $1}' /etc/shadow | tr '\\n' ' ' "
+            f"> {AGENT_BACKUP_DIR}/empty_pw_accounts.txt && "
+            "for u in $(cat "
+            f"{AGENT_BACKUP_DIR}/empty_pw_accounts.txt); do passwd -l \"$u\"; done",
+            "for u in $(cat "
+            f"{AGENT_BACKUP_DIR}/empty_pw_accounts.txt); do passwd -u \"$u\"; done",
+            0.5,
+            "Lock accounts with empty password fields; affected account "
+            "list snapshotted pre-mutation for exact rollback — WARNING: "
+            "unlocking re-creates the original finding, rollback is only "
+            "for operational undo"),
     # "R04" intentionally absent: action/rollback are GENERATED from the
     # observed users_uid0_extra list (see build_uid0_remediation);
     # plan() intercepts R04 before the KB lookup. Do not re-add a
@@ -364,8 +375,13 @@ REMEDIATION_KB = {
             "Raise minimum password length"),
     "R10": ("sed -i 's/APT::Periodic::Unattended-Upgrade \"0\"/"
             "APT::Periodic::Unattended-Upgrade \"1\"/' "
-            "/etc/apt/apt.conf.d/20auto-upgrades", None, 0.2,
-            "Re-enable unattended security upgrades"),
+            "/etc/apt/apt.conf.d/20auto-upgrades",
+            "sed -i 's/APT::Periodic::Unattended-Upgrade \"1\"/"
+            "APT::Periodic::Unattended-Upgrade \"0\"/' "
+            "/etc/apt/apt.conf.d/20auto-upgrades",
+            0.2,
+            "Re-enable unattended security upgrades; rollback disables "
+            "them again"),
     "R11": ("systemctl disable --now vsftpd", "systemctl enable --now vsftpd", 0.6,
             "Stop cleartext FTP exposure"),
     "R12": ("systemctl disable --now snmpd", "systemctl enable --now snmpd", 0.5,
@@ -403,16 +419,6 @@ REMEDIATION_KB = {
     "L1": (None, None, None,
            "Classifier-only finding: investigate compound configuration manually"),
 }
-
-def build_uid0_remediation(raw):
-    """R04: generate action/rollback from the observed UID-0 accounts."""
-    offenders = sorted(set(raw.get("accounts", {}).get("users_uid0_extra") or []))
-    if not offenders:
-        return None, None
-    names = " ".join(offenders)
-    action = "userdel " + names
-    rollback = "for u in " + names + '; do useradd -o -u 0 -g 0 -M "$u"; done'
-    return action, rollback
 
 def build_uid0_remediation(raw):
     """R04: action/rollback generated from the OBSERVED UID-0 accounts.
@@ -462,6 +468,8 @@ def plan(con, findings, alpha=ALPHA_DEFAULT, beta=BETA_DEFAULT,
         rid = f["rule_id"]
         if rid == "R04":
             action, rollback = build_uid0_remediation(f.get("_raw") or {})
+            if action is None:
+                continue
             disrupt, rationale = 0.7, (action, rollback, 0.7,
                         "Remove unauthorized UID-0 accounts "
                         "(generated from observed list)")
@@ -519,6 +527,8 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
     approved_any = False
     for idx, step in enumerate(steps):
         if step["action"] is None:
+            if step["rule_id"] == "R04":
+                continue    # dynamic step with no usable raw data: skip silently
             print(f"\n[{idx}] {step['rule_id']}: {step['rationale']} "
                   f"(no auto-action) — record for manual review")
             continue
@@ -708,6 +718,8 @@ def main():
                                  "evidence": f"suid_binaries rose {prv_suid} -> {cur_suid} since previous scan"})
         except json.JSONDecodeError:
             pass # fail-static: corrupt history never blocks scan
+    for f in findings:
+        f["_raw"] = snap["features_raw"]
     risk = composite_risk(findings, p_vuln)
     steps = plan(con, findings, alpha=args.alpha, beta=args.beta,
                  gamma=args.gamma)

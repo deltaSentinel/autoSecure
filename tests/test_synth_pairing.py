@@ -135,3 +135,71 @@ def test_clean_baselines_draw_from_paired_pool():
         "distribution (all "
         f"{len(clean_vals)} clean samples say 'no')")
 
+# Background: the M02 tag entry used to be
+#   "M02": {"ml": {"risk_ssh_password_auth": 1}, "raw": {}}
+# so injection bumped the ML feature but never wrote
+# raw ssh.password_authentication="yes". R07 (the only rule that can
+# catch lone M02) reads the raw value, so it fired only on the ~30% of
+# tagged samples whose baseline happened to draw the password-auth noise
+# (hybrid missed 9/12 lone-M02 singles). The fix mirrors the raw field,
+# same discipline as the FIX [3] M01 pairing. These tests lock that
+# contract in both directions so a future trim-noise or enrich-features
+# change cannot silently reopen the gap.
+
+def _password_pair(snap):
+    """Return (ml_flag, raw_value) for the password-auth pair."""
+    ml = snap.get("features_ml") or {}
+    raw_ssh = (snap.get("features_raw", {}).get("ssh", {}) or {})
+    return ml.get("risk_ssh_password_auth"), raw_ssh.get("password_authentication")
+
+
+def test_ml_agrees_with_raw_password_auth():
+    """risk_ssh_password_auth must equal 1 iff raw ssh.password_authentication is "yes"."""
+    violations = []
+    for path, snap in _snapshots():
+        ml_val, raw_val = _password_pair(snap)
+        if ml_val is None:
+            continue  # masked to None = unmeasured, not a pairing violation
+        expected = 1 if str(raw_val).lower() == "yes" else 0
+        if ml_val != expected:
+            violations.append(
+                f"{path.name}: raw ssh.password_authentication={raw_val!r} -> "
+                f"expected ml risk_ssh_password_auth={expected!r}, got {ml_val!r}")
+    assert not violations, (
+        "features_ml['risk_ssh_password_auth'] disagrees with raw "
+        "ssh.password_authentication in:\n"
+        + "\n".join(violations[:10])
+        + "\nCheck the M02 raw mirroring in the EFFECTS catalog and the "
+        "clean-baseline noise pairing in clean_baseline(), then regenerate.")
+
+
+def test_m02_tagged_snapshots_carry_raw_password_auth_yes():
+    """Every snapshot whose filename tags M02 must carry the raw marker and the ML flag.
+
+    This is the direct regression guard for the raw-mirroring fix: injection
+    and raw snapshot must never diverge again for password auth.
+    """
+    seen = 0
+    violations = []
+    for path, snap in _snapshots():
+        if "M02" not in path.name:
+            continue
+        seen += 1
+        ml_val, raw_val = _password_pair(snap)
+        if str(raw_val or "").lower() != "yes":
+            violations.append(
+                f"{path.name}: M02-tagged snapshot missing raw "
+                f"ssh.password_authentication='yes' (got {raw_val!r})")
+        if ml_val != 1:
+            violations.append(
+                f"{path.name}: M02-tagged snapshot has "
+                f"ml risk_ssh_password_auth={ml_val!r}, expected 1")
+    if not seen:
+        pytest.skip("no M02-tagged snapshots in data/synth/")
+    assert not violations, (
+        "M02 raw mirroring broken; injection bumps the ML flag but the raw "
+        "marker is absent, so R07 cannot fire and the hybrid reopens the "
+        "9/12 lone-M02 blind spot:\n"
+        + "\n".join(violations[:10])
+        + "\nFix the 'raw' payload of the M02 EFFECTS entry in "
+        "experiments/synth_dataset.py, then regenerate.")

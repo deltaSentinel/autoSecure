@@ -46,7 +46,7 @@ EFFECTS = {
     "M01": {"ml": {"risk_ssh_permit_root_login": 1},
             "raw": {"ssh": {"permit_root_login": "yes"}}},
     "M02": {"ml": {"risk_ssh_password_auth": 1},
-            "raw": {}},
+            "raw": {"ssh": {"password_authentication": "yes"}}},
     "M03": {"ml": {"risk_ssh_empty_passwords": 1},
             "raw": {"ssh": {"permit_empty_passwords": "yes"}}},
     "M04": {"ml": {"risk_shadow_group_writable": 1,

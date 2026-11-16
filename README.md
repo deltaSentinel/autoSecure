@@ -32,7 +32,7 @@ The threshold-sweep result is the core architectural claim: the hand-written rul
 
 ### Architecture
 
-![AutoSecure four-layer architecture](Presentations/Images/Diagrams/architecture.png)
+![AutoSecure four-layer architecture](presentations/Images/Diagrams/architecture.png)
 
 | Layer | Function | Type (Russell & Norvig) |
 |-------|----------|-------------------------|

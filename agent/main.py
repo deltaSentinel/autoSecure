@@ -74,9 +74,13 @@ CREATE TABLE IF NOT EXISTS findings (
     scan_id       INTEGER NOT NULL REFERENCES scans(id),
     rule_id       TEXT,         -- R01..R16, or 'L1' for classifier-only
     layer         TEXT,         -- L0 / L1 / L2
-    severity      REAL,
+    severity      REAL,         -- EFFECTIVE fused severity (planner input)
     evidence      TEXT,         -- human-readable proof chain
-    status        TEXT DEFAULT 'open'   -- open|remediated|rejected
+    status        TEXT DEFAULT 'open',   -- open|remediated|rejected
+    severity_raw  REAL,         -- originating layer judgment, pre-fusion
+    fusion_weight REAL,         -- 1 + K*(p-thr); 1.0 when L1 unavailable
+    contrib_layers TEXT,        -- layers that contributed to this severity
+    p_vuln        REAL          -- host classifier probability at fusion time
 );
 CREATE TABLE IF NOT EXISTS feedback (
     id            INTEGER PRIMARY KEY,
@@ -98,6 +102,13 @@ CREATE TABLE IF NOT EXISTS actions (
 );
 """
 
+_FINDINGS_ADDITIONS = (
+    ("severity_raw",   "REAL"),
+    ("fusion_weight",  "REAL"),
+    ("contrib_layers", "TEXT"),
+    ("p_vuln",         "REAL"),
+)
+
 AGENT_BACKUP_DIR = "/var/lib/autosecure/agent-backups"   # root runs; see --act
 UID0_PASSWD_BACKUP = os.path.join(AGENT_BACKUP_DIR, "uid0_passwd.txt")
 
@@ -107,12 +118,23 @@ def utcnow():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def _migrate_findings(con):
+    """In-place ALTER TABLE migration for memory.db files created before
+    the fusion refactor. CREATE TABLE IF NOT EXISTS does not touch an
+    existing table, so old files would silently miss the new columns."""
+    existing = {r["name"] for r in con.execute("PRAGMA table_info(findings)")}
+    for col, col_type in _FINDINGS_ADDITIONS:
+        if col not in existing:
+            con.execute(f"ALTER TABLE findings ADD COLUMN {col} {col_type}")
+    con.commit()
+
+
 def open_memory(path):
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
+    _migrate_findings(con)
     return con
-
 
 # ===========================================================================
 # PERCEPTION
@@ -298,29 +320,57 @@ def compute_deltas(prev_blob, current_ml):
     note = f"{len(deltas)} features changed since previous scan"
     return deltas, note
 
+P_THRESHOLD_DEFAULT = 0.5
+FUSION_K_DEFAULT = 0.5
 
-def diagnose(reflex_findings, p_vuln, importances, deltas):
-    """Merge L0 + L1 into attributed findings. Adds provenance."""
+def diagnose(reflex_findings, p_vuln, importances, deltas,
+             p_threshold=P_THRESHOLD_DEFAULT, fusion_k=FUSION_K_DEFAULT):
+    """Merge L0 + L1 into attributed findings under weighted arbitration.
+
+    Every returned finding carries:
+      severity        effective (fused) severity - planner / risk input
+      severity_raw    originating layer's unmodulated judgment
+      fusion_weight   1 + K*(p - thr), or 1.0 when L1 is unavailable
+      contrib_layers  which layers contributed ("L0" / "L1" / "L2")
+      p_vuln          host-level classifier probability at fusion time
+
+    Fail-static: p_vuln None => L0 findings pass through unmodulated and
+    no L1-only finding is raised.
+    """
     findings = []
+    corroborated = p_vuln is not None and p_vuln >= p_threshold
+
     for f in reflex_findings:
         ev = f["evidence"]
         if f["rule_id"] in {"R02"} and "risk_shadow" in deltas:
             d = deltas["risk_shadow"]
             ev += f" (drift: {d['was']} -> {d['now']})"
         if p_vuln is not None:
-            ev += f" [classifier agrees: p={p_vuln:.2f}]"
-        findings.append(dict(f, evidence=ev))
+            stance = "agrees" if corroborated else "dissents (dampened)"
+            ev += f" [classifier {stance}: p={p_vuln:.2f}]"
+        eff, weight = fuse_severity(f["severity"], p_vuln,
+                                     p_threshold, fusion_k)
+        findings.append(dict(f, severity=eff, evidence=ev,
+                             severity_raw=f["severity"],
+                             fusion_weight=weight,
+                             contrib_layers="L0",
+                             p_vuln=p_vuln))
 
-    if p_vuln is not None and not reflex_findings and p_vuln >= 0.5:
+    if p_vuln is not None and not reflex_findings and corroborated:
         top = ""
         if importances:
             ranked = sorted(importances.items(), key=lambda kv: -kv[1])[:3]
             top = " top contributing features: " + ", ".join(
                 f"{k} ({v:.3f})" for k, v in ranked)
+        raw = round(p_vuln, 2)
+        eff, weight = fuse_severity(raw, p_vuln, p_threshold, fusion_k)
         findings.append({
-            "rule_id": "L1", "layer": "L1", "severity": round(p_vuln, 2),
+            "rule_id": "L1", "layer": "L1", "severity": eff,
+            "severity_raw": raw, "fusion_weight": weight,
+            "contrib_layers": "L1", "p_vuln": p_vuln,
             "evidence": f"classifier flags vulnerable posture (p={p_vuln:.2f});"
-                        f" no reflex rule fired — compound-config suspicion.{top}",
+                        f" no reflex rule fired - compound-config suspicion."
+                        f"{top}",
         })
     return findings
 
@@ -462,6 +512,23 @@ ALPHA_DEFAULT, BETA_DEFAULT, GAMMA_DEFAULT = 1.0, 0.5, 0.75
 COEFFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            os.pardir, "models", "planner_coeffs.json")
 
+def fuse_severity(sev, p_vuln, p_threshold=P_THRESHOLD_DEFAULT,
+                  fusion_k=FUSION_K_DEFAULT):
+    """Weighted L0/L1 severity arbitration for a single finding.
+
+    Returns (severity_eff, fusion_weight) where
+        weight = 1 + K * (p_vuln - p_threshold)
+        eff    = clamp(sev * weight, 0, 1)
+
+    Fail-static (invariant 3): p_vuln None means "no learned opinion";
+    the raw severity passes through with neutral weight 1.0 and the agent
+    never guesses a modulation.
+    """
+    if p_vuln is None:
+        return sev, 1.0
+    weight = 1.0 + fusion_k * (p_vuln - p_threshold)
+    eff = max(0.0, min(1.0, sev * weight))
+    return round(eff, 3), round(weight, 3)
 
 def load_planner_coeffs(path=COEFFS_PATH):
     """Load sweep-learned planner defaults. Fail-static.
@@ -525,7 +592,9 @@ def plan(con, findings, alpha=ALPHA_DEFAULT, beta=BETA_DEFAULT,
                         - beta * (disrupt or 0.0)
                         - gamma * penalty, 3)
         steps.append({
-            "rule_id": rid, "severity": f["severity"], "utility": utility,
+            "rule_id": rid, "severity": f["severity"],
+            "severity_raw": f.get("severity_raw", f["severity"]),
+            "utility": utility,
             "action": action, "rollback": rollback,
             "disruptiveness": disrupt, "fp_penalty": penalty,
             "rationale": rationale, "evidence": f["evidence"],
@@ -677,19 +746,24 @@ def write_report(path, snap, scan_id, findings, p_vuln, deltas, delta_note,
     ]
     if findings:
         for f in findings:
-            lines.append(f"- **[{f['rule_id']}/{f['layer']}]** (sev "
-                         f"{f['severity']}) {f['evidence']}")
+            raw = f.get("severity_raw", f["severity"])
+            w = f.get("fusion_weight", 1.0)
+            layers = f.get("contrib_layers", "?")
+            lines.append(
+                    f"- **[{f['rule_id']}/{f['layer']}]** sev {f['severity']} "
+                    f"(raw {raw}, w={w}, {layers}) {f['evidence']}")
     else:
         lines.append("- None. No reflex rules fired and classifier did not "
                      "flag the host.")
     lines += ["", "## Proposed remediation plan (utility-ranked)", ""]
     if steps:
-        lines.append("| # | Rule | Utility | Disruption | Action |")
-        lines.append("|---|------|---------|------------|--------|")
+        lines.append("| # | Rule | Utility | Sev eff | Sev raw | Disruption | Action |")
+        lines.append("|---|------|---------|---------|---------|------------|--------|")
         for i, s in enumerate(steps, 1):
             act = (s["action"] or s["rationale"]).replace("|", "\\|")
             lines.append(f"| {i} | {s['rule_id']} | {s['utility']} | "
-                         f"{s['disruptiveness']} | `{act}` |")
+                        f"{s['severity']} | {s.get('severity_raw', s['severity'])} | "
+                        f"{s['disruptiveness']} | `{act}` |")
     else:
         lines.append("- Nothing to remediate.")
     lines += [
@@ -734,10 +808,23 @@ def main():
     ap.add_argument("--gamma", type=float, default=None,
                     help="planner weight: false-positive penalty "
                          "(default: learned planner_coeffs.json, else 0.75)")
+    ap.add_argument("--p-threshold", type=float, default=P_THRESHOLD_DEFAULT,
+                    help="L1 agreement threshold for fusion arbitration "
+                         "(default: 0.5)")
+    ap.add_argument("--fusion-k", type=float, default=FUSION_K_DEFAULT,
+                    help="fusion modulation strength K; weight = "
+                         "1 + K*(p - threshold); 0 disables modulation "
+                         "(default: 0.5)")
     ap.add_argument("--coeffs", default=COEFFS_PATH,
                     help="persisted planner coefficients JSON "
                          "(default: models/planner_coeffs.json)")
     args = ap.parse_args()
+
+    if args.fusion_k < 0:
+        sys.exit("[-] --fusion-k must be >= 0 (negative K would invert "
+                 "agreement and dissent)")
+    if not 0.0 < args.p_threshold < 1.0:
+        sys.exit("[-] --p-threshold must lie strictly between 0 and 1")
 
     if args.yes_all and not args.act:
         sys.exit("[-] --yes-all requires --act (refusing silent mutation)")
@@ -764,21 +851,30 @@ def main():
     print(f"[+] AutoSecure v{AGENT_VERSION} | scan #{scan_id} | "
           f"host {snap['meta'].get('host_id')}")
     print(f"[i] planner coeffs: alpha={resolved_alpha} beta={resolved_beta} "
-          f"gamma={resolved_gamma} | {coeffs_note}"
+          f"gamma={resolved_gamma} | fusion: K={args.fusion_k} "
+          f"thr={args.p_threshold} | {coeffs_note}"
           + (" [explicit CLI flags override learned values]" if overridden
              else ""))
 
     l0 = evaluate_reflex(snap["features_raw"])
     p_vuln, importances, l1_note = classify(snap["features_ml"], args.model)
-    findings = diagnose(l0, p_vuln, importances, deltas)
+    findings = diagnose(l0, p_vuln, importances, deltas,
+                        p_threshold=args.p_threshold,
+                        fusion_k=args.fusion_k)
+
     if prev is not None and prev["raw_blob"] is not None:
         try:
             prev_raw = json.loads(prev["raw_blob"])
             cur_suid = snap["features_raw"].get("filesystem", {}).get("suid_binaries")
             prv_suid = prev_raw.get("filesystem", {}).get("suid_binaries")
             if None not in (cur_suid, prv_suid) and cur_suid > prv_suid:
-                findings.append({"rule_id": "R16", "layer": "L2", "severity": 0.7,
-                                 "evidence": f"suid_binaries rose {prv_suid} -> {cur_suid} since previous scan"})
+                eff16, w16 = fuse_severity(0.7, p_vuln, args.p_threshold,
+                                           args.fusion_k)
+                findings.append({
+                    "rule_id": "R16", "layer": "L2", "severity": eff16,
+                    "severity_raw": 0.7, "fusion_weight": w16,
+                    "contrib_layers": "L2", "p_vuln": p_vuln,
+                    "evidence": f"suid_binaries rose {prv_suid} -> {cur_suid} since previous scan"})
         except json.JSONDecodeError:
             pass # fail-static: corrupt history never blocks scan
     for f in findings:
@@ -791,9 +887,14 @@ def main():
     findings_rows = {}
     for f in findings:
         cur = con.execute(
-            "INSERT INTO findings(scan_id, rule_id, layer, severity, evidence) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (scan_id, f["rule_id"], f["layer"], f["severity"], f["evidence"]))
+            "INSERT INTO findings(scan_id, rule_id, layer, severity, evidence, "
+            "severity_raw, fusion_weight, contrib_layers, p_vuln) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scan_id, f["rule_id"], f["layer"], f["severity"], f["evidence"],
+             f.get("severity_raw", f["severity"]),
+             f.get("fusion_weight", 1.0),
+             f.get("contrib_layers", f["layer"]),
+             p_vuln))
         findings_rows.setdefault(f["rule_id"], cur.lastrowid)
     con.commit()
 
@@ -825,7 +926,11 @@ def main():
         "l1_status": l1_note,
         "drift": delta_note,
         "findings": [{"rule": f["rule_id"], "layer": f["layer"],
-                      "severity": f["severity"]} for f in findings],
+                      "severity": f["severity"],
+                      "severity_raw": f.get("severity_raw", f["severity"]),
+                      "fusion_weight": f.get("fusion_weight", 1.0),
+                      "contrib_layers": f.get("contrib_layers", f["layer"]),
+                      "p_vuln": f.get("p_vuln")} for f in findings],
         "planned_steps": len(steps),
         "report": os.path.abspath(report_path),
         "verdict": "healthy" if risk < 0.5 else "action required",

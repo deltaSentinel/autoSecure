@@ -20,6 +20,14 @@ SAFETY INVARIANTS (enforced here, not by convention):
     4. AUDITABILITY. Every decision, approval, rejection, and execution
        outcome is written to the SQLite working memory.
 
+Planner coefficients:
+    beta/gamma defaults are learned offline by experiments/planner_sweep.py
+    (--db mode) and persisted to models/planner_coeffs.json next to
+    model.joblib. Resolution order: explicit CLI flag > learned artifact >
+    built-in constant. Alpha stays fixed at 1.0 as the normalization anchor.
+    A missing, corrupt, or malformed artifact degrades to built-in defaults
+    and is reported (invariant 3).
+
 Usage:
     # Assessment only (always safe):
     python3 main.py --snapshot ../dataset/target-b_M01_1234.json
@@ -45,7 +53,7 @@ import sys
 from getpass import getpass
 from datetime import datetime
 
-AGENT_VERSION = "0.2.1"
+AGENT_VERSION = "0.3.0"
 
 # ===========================================================================
 # SCHEMA / WORKING MEMORY
@@ -446,7 +454,43 @@ def build_uid0_remediation(raw):
     return action, rollback
 
 # Utility:  U(a) = ALPHA*severity - BETA*disruptiveness - GAMMA*fp_penalty
+# Built-in fallbacks. beta/gamma are learned offline by
+# experiments/planner_sweep.py (--db mode) and persisted to
+# models/planner_coeffs.json next to model.joblib (second learned artifact).
 ALPHA_DEFAULT, BETA_DEFAULT, GAMMA_DEFAULT = 1.0, 0.5, 0.75
+
+COEFFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           os.pardir, "models", "planner_coeffs.json")
+
+
+def load_planner_coeffs(path=COEFFS_PATH):
+    """Load sweep-learned planner defaults. Fail-static.
+
+    Returns ({'beta': float, 'gamma': float}, note); an empty dict means
+    'no usable learned artifact, use built-in defaults'. A corrupt or
+    malformed artifact never blocks a scan: it degrades to defaults and
+    is REPORTED (invariant 3). Alpha is deliberately not loaded: it stays
+    fixed at 1.0 as the normalization anchor, matching planner_sweep.py.
+    """
+    if not os.path.exists(path):
+        return {}, f"no planner_coeffs.json at {os.path.abspath(path)} (built-in defaults)"
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        beta, gamma = data["beta"], data["gamma"]
+        if not (isinstance(beta, (int, float))
+                and isinstance(gamma, (int, float))
+                and not isinstance(beta, bool) and not isinstance(gamma, bool)):
+            raise ValueError("beta/gamma must be numbers")
+        note = f"learned defaults loaded from {os.path.abspath(path)}"
+        alpha = data.get("alpha")
+        if alpha is not None and float(alpha) != ALPHA_DEFAULT:
+            note += (f" [stored alpha={alpha} ignored: alpha is the "
+                     f"fixed {ALPHA_DEFAULT} anchor]")
+        return {"beta": float(beta), "gamma": float(gamma)}, note
+    except Exception as e:
+        return {}, (f"planner_coeffs.json unreadable ({e.__class__.__name__}: {e}) "
+                    f"at {os.path.abspath(path)} — built-in defaults (fail-static)")
 
 
 def fp_penalty(con, rule_id):
@@ -681,16 +725,31 @@ def main():
                     help="ENABLE MUTATIONS: enter interactive approval gate")
     ap.add_argument("--yes-all", action="store_true",
                     help="approve every proposed action (lab use only!)")
-    ap.add_argument("--alpha", type=float, default=ALPHA_DEFAULT,
-                    help="planner weight: severity")
-    ap.add_argument("--beta", type=float, default=BETA_DEFAULT,
-                    help="planner weight: disruption penalty")
-    ap.add_argument("--gamma", type=float, default=GAMMA_DEFAULT,
-                    help="planner weight: false-positive penalty")
+    ap.add_argument("--alpha", type=float, default=None,
+                    help="planner weight: severity (fixed 1.0 anchor; kept "
+                         "for experiment parity)")
+    ap.add_argument("--beta", type=float, default=None,
+                    help="planner weight: disruption penalty "
+                         "(default: learned planner_coeffs.json, else 0.5)")
+    ap.add_argument("--gamma", type=float, default=None,
+                    help="planner weight: false-positive penalty "
+                         "(default: learned planner_coeffs.json, else 0.75)")
+    ap.add_argument("--coeffs", default=COEFFS_PATH,
+                    help="persisted planner coefficients JSON "
+                         "(default: models/planner_coeffs.json)")
     args = ap.parse_args()
 
     if args.yes_all and not args.act:
         sys.exit("[-] --yes-all requires --act (refusing silent mutation)")
+
+    # ---- Planner coefficients: CLI flag > learned artifact > built-in ----
+    learned, coeffs_note = load_planner_coeffs(args.coeffs)
+    resolved_alpha = args.alpha if args.alpha is not None else ALPHA_DEFAULT
+    resolved_beta = (args.beta if args.beta is not None
+                     else learned.get("beta", BETA_DEFAULT))
+    resolved_gamma = (args.gamma if args.gamma is not None
+                      else learned.get("gamma", GAMMA_DEFAULT))
+    overridden = learned and (args.beta is not None or args.gamma is not None)
 
     # ---- Perception & belief state --------------------------------------
     snap = perceive(args.snapshot)
@@ -704,6 +763,10 @@ def main():
     # ---- Reasoning -------------------------------------------------------
     print(f"[+] AutoSecure v{AGENT_VERSION} | scan #{scan_id} | "
           f"host {snap['meta'].get('host_id')}")
+    print(f"[i] planner coeffs: alpha={resolved_alpha} beta={resolved_beta} "
+          f"gamma={resolved_gamma} | {coeffs_note}"
+          + (" [explicit CLI flags override learned values]" if overridden
+             else ""))
 
     l0 = evaluate_reflex(snap["features_raw"])
     p_vuln, importances, l1_note = classify(snap["features_ml"], args.model)
@@ -721,8 +784,8 @@ def main():
     for f in findings:
         f["_raw"] = snap["features_raw"]
     risk = composite_risk(findings, p_vuln)
-    steps = plan(con, findings, alpha=args.alpha, beta=args.beta,
-                 gamma=args.gamma)
+    steps = plan(con, findings, alpha=resolved_alpha, beta=resolved_beta,
+                 gamma=resolved_gamma)
 
     # persist findings (audit trail, invariant 4)
     findings_rows = {}

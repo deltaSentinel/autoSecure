@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Planner coefficient sweep: how do alpha/beta/gamma shape remediation plans?
 
-Imports plan() directly from agent/main.py (single source of truth — the
+Imports plan() directly from agent/main.py (single source of truth: the
 experiment measures the deployed planner, not a copy). Introspects the real
 REFLEX_RULES and REMEDIATION_KB at runtime.
 
@@ -10,11 +10,27 @@ Findings:
     crossings, not membership changes.
   - N/A-action steps are tier-quarantined below action-bearing steps
     regardless of utility (sort key (action is None, -utility)).
-"""
-import argparse, csv, itertools, os, sqlite3, sys, shutil
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                os.pardir, "agent"))
+Modes:
+  - synthetic (default): seeds in-memory feedback histories. Regression/CI
+    mode. Never writes planner_coeffs.json, so it cannot clobber learned
+    values from a real run.
+  - real (--db PATH): loads the operator feedback table from a real mem.db
+    (read-only), ranks grid cells by an objective, and persists the winning
+    beta/gamma to models/planner_coeffs.json alongside model.joblib. Alpha
+    stays fixed at 1.0 as the normalization anchor; only beta and gamma are
+    learned.
+
+Safety: in real mode the DB is opened read-only (the sweep only reads the
+feedback table via fp_penalty()), and candidate cells that break the
+N/A-quarantine invariant are excluded from selection. Below the
+small-sample threshold the tool recommends nothing and leaves current
+defaults (and any previously persisted coefficients) untouched.
+"""
+import argparse, csv, itertools, json, os, shutil, sqlite3, subprocess, sys
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(BASE, os.pardir, "agent"))
 from main import plan, REFLEX_RULES, REMEDIATION_KB   # noqa: E402
 
 from datetime import datetime
@@ -23,6 +39,9 @@ STAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 ALPHA = 1.0
 BETAS  = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
 GAMMAS = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
+
+DEFAULT_OUT    = os.path.join(BASE, os.pardir, "reports", "experiments")
+DEFAULT_COEFFS = os.path.join(BASE, os.pardir, "models", "planner_coeffs.json")
 
 
 def seed_con(history):
@@ -41,6 +60,42 @@ def seed_con(history):
                         "VALUES (?,?,datetime('now'))",
                         [(dec, rid)] * n)
     return con
+
+
+def real_con(db_path):
+    """Read-only connection to a real mem.db. Only the feedback table is
+    touched (by fp_penalty()), so ro mode can never mutate operator data."""
+    if not os.path.exists(db_path):
+        sys.exit(f"[!] no such db: {db_path}")
+    uri = "file:" + os.path.abspath(db_path).replace("\\", "/") + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("SELECT 1 FROM feedback LIMIT 1")
+    except sqlite3.DatabaseError:
+        sys.exit(f"[!] {db_path} has no readable feedback table "
+                 "(run agent/main.py first)")
+    return con
+
+
+def git_commit():
+    """Best-effort commit hash for the report; 'unknown' outside a repo."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"],
+                             cwd=BASE, capture_output=True, text=True,
+                             check=True)
+        return out.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def quarantine_held(steps):
+    """Invariant: no N/A-action step precedes an action-bearing one."""
+    action_idx = [i for i, s in enumerate(steps) if s["action"] is not None]
+    na_idx = [i for i, s in enumerate(steps) if s["action"] is None]
+    if not action_idx or not na_idx:
+        return True
+    return all(a < b for a in action_idx for b in na_idx)
 
 
 def catalog_findings():
@@ -65,7 +120,11 @@ HISTORIES = {
 }
 
 
-def run(out_dir):
+# --------------------------------------------------------------------------
+# Synthetic mode (unchanged behavior; regression/CI)
+# --------------------------------------------------------------------------
+
+def run_synthetic(out_dir):
     os.makedirs(out_dir, exist_ok=True)
     hist = os.path.join(out_dir, "history")
     os.makedirs(hist, exist_ok=True)
@@ -88,18 +147,12 @@ def run(out_dir):
                     utils = {s["rule_id"]: s["utility"] for s in steps}
                     for rid, u in utils.items():
                         per_rule.setdefault((rid, hname), {})[(beta, gamma)] = u
-                    action_bearing = [s for s in steps if s["action"] is not None]
-                    na = [s for s in steps if s["action"] is None]
-                    # invariant: no N/A step precedes an action-bearing one
-                    held = all(steps.index(a) < steps.index(b)
-                               for a in action_bearing for b in na) \
-                        if action_bearing and na else True
                     w.writerow([sname, hname, beta, gamma, len(steps),
                                  sum(1 for u in utils.values() if u > 0),
                                  sum(1 for u in utils.values() if u < 0),
                                  steps[0]["rule_id"] if steps else "",
                                  utils.get("R06", ""),
-                                 int(held)])
+                                 int(quarantine_held(steps))])
                     rows_written += 1
     print(f"[+] grid -> {csv_path} ({rows_written} cells)")
 
@@ -107,7 +160,7 @@ def run(out_dir):
     rep_path = os.path.join(out_dir, "planner_report.md")
     with open(rep_path, "w") as fh:
         fh.write("# Planner Coefficient Sweep\n\n"
-                 f"- alpha fixed at {ALPHA} (pure scale factor — note, not swept)\n"
+                 f"- alpha fixed at {ALPHA} (pure scale factor, not swept)\n"
                  f"- beta, gamma in {{0, 0.25, 0.5, 1, 2, 4}} ({len(BETAS)*len(GAMMAS)} cells)\n"
                  f"- scenarios: {', '.join(SCENARIOS)} | histories: {', '.join(HISTORIES)}\n\n"
                  "## Utility zero-crossings (beta* at gamma=0.5)\n\n"
@@ -144,12 +197,193 @@ def run(out_dir):
                  "within it; the analytic column (exact, U linear in beta) "
                  "is the precise value.\n")
     print(f"[+] report -> {rep_path}")
+    shutil.copy2(csv_path, hist_csv)
+    shutil.copy2(rep_path, os.path.join(hist, f"planner_report_{STAMP}.md"))
+    print(f"[+] history -> {hist}/ (*_{STAMP})")
+    print("[i] synthetic mode: planner_coeffs.json intentionally not "
+          "written (regression/CI path)")
+
+
+# --------------------------------------------------------------------------
+# Real mode (--db): sweep against operator feedback, recommend, persist
+# --------------------------------------------------------------------------
+
+def rank_cells(per_cell, objective):
+    """Total order over cells so repeated runs pick identical winners.
+
+    approved_utility: maximize summed utility of operator-approved rules;
+    min_negative: minimize approved steps landing below zero utility.
+    Ties: prefer fewer approved negatives, then smaller beta, then smaller
+    gamma (simpler cells win, output is fully deterministic).
+    """
+    def sort_key(item):
+        (beta, gamma), st = item
+        if objective == "approved_utility":
+            return (-st["approved_utility"], st["approved_negatives"],
+                    beta, gamma)
+        return (st["approved_negatives"], -st["approved_utility"],
+                beta, gamma)
+    return sorted(per_cell.items(), key=sort_key)
+
+
+def run_real(out_dir, db_path, objective, min_feedback, coeffs_path):
+    os.makedirs(out_dir, exist_ok=True)
+    hist = os.path.join(out_dir, "history")
+    os.makedirs(hist, exist_ok=True)
+    csv_path = os.path.join(out_dir, "planner_sweep.csv")
+    rep_path = os.path.join(out_dir, "planner_report.md")
+
+    con = real_con(db_path)
+    total = con.execute("SELECT COUNT(*) AS n FROM feedback").fetchone()["n"]
+    approved_rules = {r["rule_id"] for r in con.execute(
+        "SELECT DISTINCT rule_id FROM feedback WHERE decision='approve'")}
+    commit = git_commit()
+
+    # aggregate per grid cell, summed across scenarios
+    per_cell = {}
+    rows_written = 0
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["scenario", "history", "beta", "gamma",
+                    "n_steps", "n_positive_utility", "n_negative_utility",
+                    "head_rule", "r06_utility", "na_quarantine_held"])
+        for sname, sfn in SCENARIOS.items():
+            findings = sfn()
+            for beta, gamma in itertools.product(BETAS, GAMMAS):
+                steps = plan(con, findings, alpha=ALPHA,
+                             beta=beta, gamma=gamma)
+                utils = {s["rule_id"]: s["utility"] for s in steps}
+                st = per_cell.setdefault(
+                    (beta, gamma),
+                    {"approved_utility": 0.0, "approved_negatives": 0,
+                     "held": True})
+                au = sum(u for rid, u in utils.items()
+                         if rid in approved_rules)
+                nneg = sum(1 for rid, u in utils.items()
+                           if rid in approved_rules and u < 0)
+                st["approved_utility"] += au
+                st["approved_negatives"] += nneg
+                held = quarantine_held(steps)
+                st["held"] = st["held"] and held
+                w.writerow([sname, "real_db", beta, gamma, len(steps),
+                            sum(1 for u in utils.values() if u > 0),
+                            sum(1 for u in utils.values() if u < 0),
+                            steps[0]["rule_id"] if steps else "",
+                            utils.get("R06", ""),
+                            int(held)])
+                rows_written += 1
+    print(f"[+] grid -> {csv_path} ({rows_written} cells)")
+
+    # invariant-safe candidates only
+    candidates = {k: v for k, v in per_cell.items() if v["held"]}
+    ranked = rank_cells(candidates, objective)
+
+    guarded = total < min_feedback
+    rec_lines = [
+        "# Planner Coefficient Sweep (real feedback)\n",
+        "## Inputs\n",
+        f"- db: {os.path.abspath(db_path)} (opened read-only)",
+        f"- feedback rows: {total}",
+        f"- approved rules: {', '.join(sorted(approved_rules)) or 'none'}",
+        f"- objective: {objective}",
+        f"- grid: beta, gamma in {{0, 0.25, 0.5, 1, 2, 4}} "
+        f"({len(BETAS)*len(GAMMAS)} cells, alpha fixed at {ALPHA})",
+        f"- scenarios: {', '.join(SCENARIOS)}",
+        f"- min_feedback guard: {min_feedback}",
+        f"- commit: {commit}\n",
+        "## Recommendation\n",
+    ]
+    if guarded:
+        rec_lines.append(
+            f"SKIPPED: feedback rows ({total}) below min_feedback "
+            f"({min_feedback}). Current defaults kept; "
+            f"{coeffs_path} was not written or overwritten. Collect more "
+            "operator feedback tuples before recommending.\n")
+        print(f"[!] small-sample guard tripped ({total} < {min_feedback}): "
+              "no coefficients written")
+    elif not ranked:
+        rec_lines.append(
+            "SKIPPED: no grid cell satisfied the N/A-quarantine invariant. "
+            "Defaults kept; investigate before recommending anything.\n")
+        print("[!] no invariant-safe cell: no coefficients written")
+    else:
+        (beta, gamma), st = ranked[0]
+        rec_lines.extend([
+            f"- recommended beta = {beta}, gamma = {gamma} "
+            f"(alpha fixed at {ALPHA})",
+            f"- scored: approved_utility = {st['approved_utility']}, "
+            f"approved_negatives = {st['approved_negatives']}",
+            "- N/A-quarantine invariant held in every scenario for this "
+            "cell (na_quarantine_held = 1 throughout).",
+            f"- persisted to: {coeffs_path}\n"])
+        # reproducible: no timestamps inside the coefficients file, so
+        # repeated runs on identical inputs produce an identical artifact
+        payload = {
+            "alpha": ALPHA,
+            "beta": beta,
+            "gamma": gamma,
+            "objective": objective,
+            "inputs": {
+                "db": os.path.abspath(db_path),
+                "feedback_rows": total,
+                "approved_rules": sorted(approved_rules),
+                "grid": {"alpha": ALPHA, "betas": BETAS, "gammas": GAMMAS},
+                "scenarios": list(SCENARIOS),
+                "min_feedback": min_feedback,
+                "commit": commit,
+            },
+            "note": "Loaded by agent/main.py as planner defaults; explicit "
+                    "CLI flags still override.",
+        }
+        os.makedirs(os.path.dirname(os.path.abspath(coeffs_path)),
+                    exist_ok=True)
+        with open(coeffs_path, "w") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"[+] coefficients -> {coeffs_path} "
+              f"(beta={beta}, gamma={gamma})")
+    rec_lines.extend([
+        "\n## Notes\n",
+        "- Ranking is a total order over the finite grid (objective, then "
+        "approved negatives, then smaller beta/gamma), so repeated runs on "
+        "identical inputs yield identical coefficients.",
+        "- Utility here cannot distinguish 'action was wrong' from 'finding "
+        "was a false positive'; the feedback table records decisions only."])
+
+    with open(rep_path, "w") as fh:
+        fh.write("\n".join(rec_lines) + "\n")
+    print(f"[+] report -> {rep_path}")
     shutil.copy2(csv_path, os.path.join(hist, f"planner_sweep_{STAMP}.csv"))
     shutil.copy2(rep_path, os.path.join(hist, f"planner_report_{STAMP}.md"))
     print(f"[+] history -> {hist}/ (*_{STAMP})")
 
 
+def run(out_dir, db_path, objective, min_feedback, coeffs_path):
+    if db_path:
+        run_real(out_dir, db_path, objective, min_feedback, coeffs_path)
+    else:
+        run_synthetic(out_dir)
+
+
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(os.pardir, "reports", "experiments"))
-    run(ap.parse_args().out)
+    ap = argparse.ArgumentParser(
+        description="Sweep planner coefficients; recommend and persist "
+                    "winners when --db is given.")
+    ap.add_argument("--out", default=DEFAULT_OUT,
+                    help="output directory for CSV/report")
+    ap.add_argument("--db", default=None,
+                    help="real mem.db with an operator feedback table; "
+                         "enables recommendation mode (read-only)")
+    ap.add_argument("--objective", default="approved_utility",
+                    choices=["approved_utility", "min_negative"],
+                    help="approved_utility: maximize summed utility of "
+                         "operator-approved rules; min_negative: minimize "
+                         "approved steps with negative utility")
+    ap.add_argument("--min-feedback", type=int, default=30,
+                    help="small-sample guard: skip recommendation below "
+                         "this many feedback rows (default 30)")
+    ap.add_argument("--coeffs-out", default=DEFAULT_COEFFS,
+                    help="where to persist winning coefficients in real mode")
+    args = ap.parse_args()
+    run(args.out, args.db, args.objective, args.min_feedback, args.coeffs_out)
+

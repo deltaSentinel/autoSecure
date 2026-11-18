@@ -12,3 +12,13 @@ def test_agent_model_path_points_at_models():
     src = (ROOT / "agent" / "main.py").read_text()
     assert '"models", "model.joblib"' in src
     assert '"train", "model.joblib"' not in src
+
+def test_agent_coeffs_path_points_at_models():
+    src = (ROOT / "agent" / "main.py").read_text()
+    assert '"models", "planner_coeffs.json"' in src
+    assert '"train", "planner_coeffs.json"' not in src
+
+
+def test_train_dir_has_no_coeff_artifacts():
+    assert not (ROOT / "train" / "planner_coeffs.json").exists(), (
+        "planner_coeffs.json must live only in models/ or per-run tmp dirs")

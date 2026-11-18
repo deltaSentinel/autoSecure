@@ -42,6 +42,17 @@
       "fp": 1,
       "fn": 32,
       "tp": 398
+    },
+    "W_FUSED (agent verdict)": {
+      "accuracy": 0.9586206896551724,
+      "precision": 0.9903381642512077,
+      "recall": 0.9534883720930233,
+      "f1": 0.9715639810426541,
+      "roc_auc": 0.9934341085271318,
+      "tn": 146,
+      "fp": 4,
+      "fn": 20,
+      "tp": 410
     }
   },
   "overlap": {
@@ -58,5 +69,248 @@
     "M02": 11,
     "combo-M01-M02": 1
   },
-  "hybrid_blind_spots": {}
+  "hybrid_blind_spots": {},
+  "fusion": {
+    "k": 0.5,
+    "p_threshold": 0.5,
+    "w_fused": {
+      "accuracy": 0.9586206896551724,
+      "precision": 0.9903381642512077,
+      "recall": 0.9534883720930233,
+      "f1": 0.9715639810426541,
+      "roc_auc": 0.9934341085271318,
+      "tn": 146,
+      "fp": 4,
+      "fn": 20,
+      "tp": 410
+    },
+    "hybrid_regression_holds": true
+  },
+  "fusion_grid": [
+    {
+      "fusion_k": 0.0,
+      "p_threshold": 0.3,
+      "verdict_precision": 0.8958333333333334,
+      "verdict_recall": 1.0,
+      "verdict_f1": 0.945054945054945,
+      "risk_roc_auc": 0.9942170542635659,
+      "clean_false_alarms": 50
+    },
+    {
+      "fusion_k": 0.0,
+      "p_threshold": 0.4,
+      "verdict_precision": 0.8958333333333334,
+      "verdict_recall": 1.0,
+      "verdict_f1": 0.945054945054945,
+      "risk_roc_auc": 0.9942170542635659,
+      "clean_false_alarms": 50
+    },
+    {
+      "fusion_k": 0.0,
+      "p_threshold": 0.5,
+      "verdict_precision": 0.8958333333333334,
+      "verdict_recall": 1.0,
+      "verdict_f1": 0.945054945054945,
+      "risk_roc_auc": 0.9942170542635659,
+      "clean_false_alarms": 50
+    },
+    {
+      "fusion_k": 0.0,
+      "p_threshold": 0.6,
+      "verdict_precision": 0.8958333333333334,
+      "verdict_recall": 1.0,
+      "verdict_f1": 0.945054945054945,
+      "risk_roc_auc": 0.9942170542635659,
+      "clean_false_alarms": 50
+    },
+    {
+      "fusion_k": 0.0,
+      "p_threshold": 0.7,
+      "verdict_precision": 0.8958333333333334,
+      "verdict_recall": 1.0,
+      "verdict_f1": 0.945054945054945,
+      "risk_roc_auc": 0.9942170542635659,
+      "clean_false_alarms": 50
+    },
+    {
+      "fusion_k": 0.25,
+      "p_threshold": 0.3,
+      "verdict_precision": 0.9722863741339491,
+      "verdict_recall": 0.9790697674418605,
+      "verdict_f1": 0.9756662804171495,
+      "risk_roc_auc": 0.9933953488372093,
+      "clean_false_alarms": 12
+    },
+    {
+      "fusion_k": 0.25,
+      "p_threshold": 0.4,
+      "verdict_precision": 0.9905660377358491,
+      "verdict_recall": 0.9767441860465116,
+      "verdict_f1": 0.9836065573770492,
+      "risk_roc_auc": 0.9933720930232558,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.25,
+      "p_threshold": 0.5,
+      "verdict_precision": 0.9905437352245863,
+      "verdict_recall": 0.9744186046511628,
+      "verdict_f1": 0.9824150058616647,
+      "risk_roc_auc": 0.9933875968992248,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.25,
+      "p_threshold": 0.6,
+      "verdict_precision": 0.9905437352245863,
+      "verdict_recall": 0.9744186046511628,
+      "verdict_f1": 0.9824150058616647,
+      "risk_roc_auc": 0.9933178294573644,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.25,
+      "p_threshold": 0.7,
+      "verdict_precision": 0.9904076738609112,
+      "verdict_recall": 0.9604651162790697,
+      "verdict_f1": 0.9752066115702479,
+      "risk_roc_auc": 0.9934031007751938,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.5,
+      "p_threshold": 0.3,
+      "verdict_precision": 0.9767441860465116,
+      "verdict_recall": 0.9767441860465116,
+      "verdict_f1": 0.9767441860465116,
+      "risk_roc_auc": 0.9934108527131783,
+      "clean_false_alarms": 10
+    },
+    {
+      "fusion_k": 0.5,
+      "p_threshold": 0.4,
+      "verdict_precision": 0.9905437352245863,
+      "verdict_recall": 0.9744186046511628,
+      "verdict_f1": 0.9824150058616647,
+      "risk_roc_auc": 0.9933953488372093,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.5,
+      "p_threshold": 0.5,
+      "verdict_precision": 0.9903381642512077,
+      "verdict_recall": 0.9534883720930233,
+      "verdict_f1": 0.9715639810426541,
+      "risk_roc_auc": 0.9934341085271318,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.5,
+      "p_threshold": 0.6,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9933875968992248,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.5,
+      "p_threshold": 0.7,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9933643410852713,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.75,
+      "p_threshold": 0.3,
+      "verdict_precision": 0.9766899766899767,
+      "verdict_recall": 0.9744186046511628,
+      "verdict_f1": 0.9755529685681025,
+      "risk_roc_auc": 0.9931085271317829,
+      "clean_false_alarms": 10
+    },
+    {
+      "fusion_k": 0.75,
+      "p_threshold": 0.4,
+      "verdict_precision": 0.9903614457831326,
+      "verdict_recall": 0.9558139534883721,
+      "verdict_f1": 0.9727810650887574,
+      "risk_roc_auc": 0.9929922480620155,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.75,
+      "p_threshold": 0.5,
+      "verdict_precision": 0.9903381642512077,
+      "verdict_recall": 0.9534883720930233,
+      "verdict_f1": 0.9715639810426541,
+      "risk_roc_auc": 0.9927596899224806,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.75,
+      "p_threshold": 0.6,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9925968992248062,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 0.75,
+      "p_threshold": 0.7,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9920852713178294,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 1.0,
+      "p_threshold": 0.3,
+      "verdict_precision": 0.9764150943396226,
+      "verdict_recall": 0.9627906976744186,
+      "verdict_f1": 0.9695550351288056,
+      "risk_roc_auc": 0.9925503875968993,
+      "clean_false_alarms": 10
+    },
+    {
+      "fusion_k": 1.0,
+      "p_threshold": 0.4,
+      "verdict_precision": 0.9903614457831326,
+      "verdict_recall": 0.9558139534883721,
+      "verdict_f1": 0.9727810650887574,
+      "risk_roc_auc": 0.9923255813953489,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 1.0,
+      "p_threshold": 0.5,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9919689922480619,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 1.0,
+      "p_threshold": 0.6,
+      "verdict_precision": 0.9903147699757869,
+      "verdict_recall": 0.9511627906976744,
+      "verdict_f1": 0.970344009489917,
+      "risk_roc_auc": 0.9912558139534884,
+      "clean_false_alarms": 4
+    },
+    {
+      "fusion_k": 1.0,
+      "p_threshold": 0.7,
+      "verdict_precision": 0.9902912621359223,
+      "verdict_recall": 0.9488372093023256,
+      "verdict_f1": 0.9691211401425178,
+      "risk_roc_auc": 0.9896744186046511,
+      "clean_false_alarms": 4
+    }
+  ]
 }

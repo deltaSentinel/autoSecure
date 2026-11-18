@@ -38,10 +38,25 @@ The threshold-sweep result is the core architectural claim: the hand-written rul
 |-------|----------|-------------------------|
 | L0 — Reflex | 12 deterministic condition→finding rules | Simple reflex |
 | L1 — Classifier | Random Forest, 25-feature vector | Model-based |
-| L2 — Diagnostician | Merges L0+L1 findings, drift attribution vs. prior scans | Internal state |
+| L2 — Diagnostician | Weighted L0/L1 arbitration (fuse_severity), drift attribution vs. prior scans | Internal state |
 | L3 — Planner | Utility-ranked fixes: `severity − disruption − fp_penalty` | Utility-based |
 
 **Safety invariants:** read-only unless `--act` is passed; `--act` requires root and hard-refuses otherwise (no silent degradation); every finding is evidence-chained; operator rejections persist and lower that rule's utility in future runs.
+
+### Severity fusion
+
+Every finding carries two severities: `severity_raw` (what the producing
+layer judged) and `severity` (what the planner consumes). The two are
+linked by the fusion weight `1 + K*(p - thr)`, recorded per finding in the
+DB (`fusion_weight`, `contrib_layers`, `p_vuln`) and printed in every
+report, so the audit chain shows not just what fired but how strongly each
+layer endorsed it. Fail-static: with the model absent, weight is 1.0 and
+behavior matches the pre-fusion agent exactly.
+
+Evaluated in `reports/experiments/fusion_sweep.csv`: at the verdict level
+fusion cuts clean false alarms from 50 (plain union) to 4 while hybrid
+recall stays above max(L0, L1); full numbers in
+`reports/experiments/arbitration_report.md`.
 
 ## Quick start
 
@@ -55,6 +70,10 @@ uv venv && uv pip install scikit-learn joblib numpy pytest
 # Scan a snapshot (read-only by default)
 uv run python3 agent/main.py --snapshot <path/to/snapshot.json> --db agent/mem.db
 ```
+
+# Same scan with tuned fusion (defaults: K=0.5, thr=0.5; K=0 = old flat union):
+uv run python3 agent/main.py --snapshot data/synth/<snapshot>.json \
+    --db agent/mem.db --fusion-k 0.25 --p-threshold 0.4
 
 Mutation mode adds `--act` (requires root; refuses otherwise)
 
@@ -85,7 +104,7 @@ autoSecure/
 │   ├── training/      # eval_report.md + eval_report.pre-fix3.md (pre-FIX [3]
 │   │                  #   baseline); history/ is local-only (untracked)
 │   ├── experiments/   # arbitration_report.md, planner_report.md,
-│   │                  #   threshold_sweep.csv, planner_sweep.csv + history/
+│   │                  #   threshold_sweep.csv, fusion_sweep.csv planner_sweep.csv + history/
 │   │                  #   (untracked)
 │   └── scans/         # agent scan reports (Markdown; timestamped output untracked)
 ├── Presentations/     # decks, demo material, Images/Diagrams, Images/Graphs
@@ -134,7 +153,7 @@ Exports `model.joblib`, `feature_keys.json`, `importances.csv`, and writes evalu
 **Arbitration experiment (L0 vs L1 vs hybrid, with threshold sweep):**
 
 ```bash
-uv run python3 experiments/arb_experiment.py --dataset data/synth --out reports/experiments --sweep
+uv run python3 experiments/arb_experiment.py --dataset data/synth --out reports/experiments --sweep --fusion-grid
 ```
 
 Imports `evaluate_reflex` directly from `agent/main.py` — the experiment and the deployed agent share one rule catalog by construction. (Note: `--out reports/experiments` is explicit on purpose — the model export directory `models/` must contain deployment artifacts only.)
@@ -187,7 +206,7 @@ The vectorization contract is **law**, enforced by `models/feature_keys.json`:
 Stating limits up front is deliberate: a security tool that can't articulate its blind spots is a liability.
 
 - **M02 (SSH password auth) is intentionally blurred.** Clean baselines retain password-auth noise (~30%), so the model cannot fully separate M02 from clean hosts: 1 of 12 M02 hosts missed out-of-fold. Kept deliberately to mirror real-world ambiguity; see `reports/training/eval_report.md`.
-- - **M02 (PasswordAuthentication yes) lone singles are L1-blind by retained design.** Roughly 30% of clean baselines deliberately draw the password-auth flag (raw/ML paired), so the lone-M02 feature vector is genuinely ambiguous; the classifier correctly learns that password-auth alone does not convict and catches 1/12 singles out-of-fold. All M02-containing combos are caught by L1. The hybrid covers the gap: R07 reads the raw value directly, giving 12/12 lone-M02 recall system-wide after the M02 raw-mirroring fix. Symmetric cost: R07 also fires on the ~30% noisy-clean baselines, and a lone R07 hit sits at composite risk 0.503, just over the action threshold. Recovery of L1 single-tag recall is deferred (option C: correlation features), to be informed by break-phase real data.
+- **Symmetric cost, now measured under fusion:** on 47 clean baselines that draw the password-auth flag, the classifier dissents (p 0.10-0.35), damping the lone R07 to composite risk 0.43-0.48, below the action threshold; 46 of 47 stay healthy, the one exception being a clean host the classifier itself misjudges (p 0.61, driven by the raw-p max-fusion, see the composite-risk follow-up). The same dissent dampens 11 of the 12 genuine lone-M02 hosts below the boundary at the default K=0.5, thr=0.5 (finding-level recall stays 12/12; verdict-level recall drops to 1/12). Lowering thr to 0.4 at K=0.25 corroborates the lone-M02 host in the p 0.41-0.5 band without re-flagging the clean baselines, which is the mechanism behind that cell topping the fusion grid.
 - **M01 is undetectable by L1 alone (by design).** Since the FIX [3] pairing, a lone M01 host and a clean Debian-default host carry the *identical* ML feature vector — the distinguishing information (`"yes"` vs `"prohibit-password"`) exists only in `features_raw`, which only reflex rule R13 reads. L1 therefore catches 2/12 M01 singles out-of-fold; the hybrid design exists precisely for this. This is the cost of an honest baseline: the model cannot both learn "root login allowed is normal on Debian" and "root login allowed is an incident" from the same scalar.
 - **Trained and evaluated on synthetic data.** Real-host performance is expected to differ — we have a registered prediction that default-threshold layer nesting breaks on real hosts (clean machines carry out-of-catalog misconfigurations). The break-phase transfer test will resolve this.
 - **Calibration and threshold choice materially change the operating point:** Platt calibration improves the Brier score 0.0506 → 0.0416, and at t=0.95 the classifier-only F1 falls to 0.817 while the hybrid holds 0.973. The reflex layer is what keeps the hybrid stable across thresholds.
@@ -233,7 +252,7 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 
 **Tier 2**
 - [ ] Real-data retraining and hybrid datasets: after break-phase training, see if hybrid real/synth changes results. Also allows better setting of synth data generation.
-- [ ] Smarter arbitration: union and intersect only go so far — a middle ground with weighted fusion (severity-modulated thresholds).
+- [x] Smarter arbitration: union and intersect only go so far — a middle ground with weighted fusion (severity-modulated thresholds).
 - [ ] Drift detection: "posture trend line" to show how posture improves/degrades.
 - [ ] Multi-host: extend planner for multiple hosts.
 - [ ] Second collector backend (dnf/rpm): set up agnosticism for data collection.

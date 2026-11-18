@@ -76,7 +76,9 @@ autoSecure/
 │   ├── synth/         # 580 synthetic training snapshots (regenerable — seed 7;
 │   │                  #   NOT version-controlled)
 │   └── real/          # real LXC snapshots (break phase) — NEVER mixed with synth
-├── models/            # model.joblib, feature_keys.json, importances.csv
+├── models/            # model.joblib, feature_keys.json, importances.csv,
+│                      #   planner_coeffs.json (sweep-learned planner
+│                      #   defaults; machine-specific, gitignored)
 │                      #   (deployment artifacts only — experiment reports
 │                      #   never go here)
 ├── reports/
@@ -94,7 +96,7 @@ autoSecure/
 └── README.md          # this file
 ```
 
-The test suite includes per-rule known-positive/negative coverage, a `test_artifacts_synced.py` guard so committed reports can't silently drift from the code that generates them, and `test_synth_pairing.py`, which imports the collector's `PermitRootLogin` risk map directly and asserts every synthetic snapshot's `features_ml` is derivable from its `features_raw`.
+The test suite includes per-rule known-positive/negative coverage, a `test_artifacts_synced.py` guard so committed reports can't silently drift from the code that generates them, `test_planner_coeffs.py` covering the learned-coefficient loader, CLI override order, and the small-sample guard, and `test_synth_pairing.py`, which imports the collector's `PermitRootLogin` risk map directly and asserts every synthetic snapshot's `features_ml` is derivable from its `features_raw`.
 
 ## Environment
 
@@ -137,10 +139,16 @@ uv run python3 experiments/arb_experiment.py --dataset data/synth --out reports/
 
 Imports `evaluate_reflex` directly from `agent/main.py` — the experiment and the deployed agent share one rule catalog by construction. (Note: `--out reports/experiments` is explicit on purpose — the model export directory `models/` must contain deployment artifacts only.)
 
-**Planner utility sweep** (`--alpha/--beta/--gamma`):
+**Planner utility sweep**:
 
 ```bash
-uv run python3 experiments/planner_sweep.py
+# synthetic mode (regression/CI; never writes learned coefficients)
+uv run python3 experiments/planner_sweep.py --out reports/experiments
+
+# real-feedback mode: rank the grid against operator approve/reject
+# tuples in mem.db and persist winners to models/planner_coeffs.json
+uv run python3 experiments/planner_sweep.py --db agent/mem.db \
+    --objective approved_utility --out reports/experiments
 ```
 
 **Real-data transfer test** (break phase — run from inside `train/`):
@@ -195,9 +203,9 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 3. **Multiline pastes break `\` continuations**: treat every documented command as single-line.
 4. **`arb_experiment.py`'s agent-dir default** is `../agent` relative to `experiments/`; if the script moves again, a sed or manual change must be made. Likewise always pass `--out reports/experiments` explicitly — its output never belongs in `models/`.
 5. **Throwaway runs pollute `reports/scans/`.** The agent's `--report` defaults into the repo tree even when `--db` points at `/tmp`. Any smoke or test run must pass BOTH flags (`--db /tmp/x.db --report /tmp/x.md`); a fresh DB also restarts scan numbering at 1, so repeated throwaway runs accumulate near-duplicate `report_<host>_scan1_<stamp>.md` files. Timestamped scan reports are now gitignored, but still clean them out periodically.
-6. **`planner_sweep.py` `--out` default is cwd-relative** (`../reports/experiments`), while the canonical command in this README runs from the project root so the default writes OUTSIDE the repo. Always pass `--out reports/experiments` explicitly from the root, or run from `experiments/` where the default is correct.
+6. **`planner_sweep.py` `--out` default** is anchored to the script location (`<repo>/reports/experiments` from anywhere), no longer cwd-relative. Still pass `--out` explicitly when piping reports elsewhere. Real mode (`--db`) opens the feedback DB read-only, so it can never mutate operator data.
 7. **A typo'd assignment is a silent no-op, and metrics won't save you.** During the FIX [3] pairing, two patch attempts (`==` instead of `=`, ml entry under a misspelled key) produced *healthy-looking* metrics while the dataset was unchanged or internally impossible — both caught only by inspecting raw values (`grep -h '"permit_root_login"' data/synth/*.json | sort | uniq -c`). After touching the generator: eyeball the `git diff` for `=`/`==` and bare statements, then run `tests/test_synth_pairing.py`. Identical metrics across a "changed" dataset are a failure signal, not stability.
-
+8. **`models/planner_coeffs.json` is machine-specific**: it embeds an absolute db path and per-operator feedback counts, so it is gitignored and must be reswept per deployment. Also note: report-assembly code that only runs on failure branches (guard trips, empty candidate sets) is only ever exercised by the tests that trigger those branches. Coverage of the branch, not the line count, is what catches `append`/`extend` slips.
 </details>
 
 ## Status & next steps
@@ -213,7 +221,7 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 - [ ] Break phase: real dataset via Proxmox LXC clone loop (`gen_dataset.py` / pct workflow)
 - [ ] Transfer test (`eval_holdout.py`) + arbitration rerun on real data
 - [x] Rule extension R13–R15 (blind-spot-driven: PermitRootLogin, world-writable dirs, world-writable /etc)
-- [ ] Planner-utility experiment (`--alpha/--beta/--gamma` sweep)
+- [x] Planner coefficient learning (issue #8): sweep runs against real operator feedback, persists winning beta/gamma, agent loads them as defaults
 - [ ] Final report + presentation
 
 ## Roadmap
@@ -221,7 +229,7 @@ Stating limits up front is deliberate: a security tool that can't articulate its
 **Tier 1**
 - [x] R13–R16 remediation paths: each needs a remediation entry. Decisions to make: idempotency (rerun fix after partial fix), verification (rescan to confirm cleared), and per-backend command indirection for system agnosticism.
 - [x] Pytest regression suite: formalized echo test with `tests/` dir, a known positive and negative per rule ID.
-- [ ] Utility coefficient tuning: currently hand-set. Collect labeled sets of tuples and fit coefficients against outcomes.
+- [x] Utility coefficient tuning: currently hand-set. Collect labeled sets of tuples and fit coefficients against outcomes.
 
 **Tier 2**
 - [ ] Real-data retraining and hybrid datasets: after break-phase training, see if hybrid real/synth changes results. Also allows better setting of synth data generation.

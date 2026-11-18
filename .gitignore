@@ -2,6 +2,7 @@ data/
 *.db
 models/*.joblib
 models/*.md
+models/planner_coeffs.json
 __pycache__/
 .venv/
 demo_*.txt

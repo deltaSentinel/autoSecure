@@ -36,3 +36,45 @@
    - Collect a clean Fedora/Rocky baseline BEFORE injecting misconfigs
      so the model sees cross-distro variation inside the SAFE class.
  =====================================================================
+
+## Target prerequisites
+
+Per-backend tooling the collector expects on the scanned host. The
+collector probes binaries, not /etc/os-release, so what matters is what
+is installed, not what the distro calls itself. Missing tooling does not
+crash the run; affected features become None (unknown) and an error
+entry is recorded in meta.check_errors.
+
+### All targets
+
+- python3 (3.8+), root recommended (some probes degrade without it)
+- `ss` (iproute2) and `systemctl` used by the services check; absent or
+  failing probes record errors and yield None features
+
+### apt (Debian, Ubuntu)
+
+- `apt-get` for the simulated upgrade
+- `/etc/apt/apt.conf.d/20auto-upgrades` or
+  `/etc/apt/apt.conf.d/50unattended-upgrades` presence fallback
+
+### dnf (Fedora, RHEL/Rocky)
+
+- `dnf` (dnf4 or dnf5). Exit-code contract verified against dnf4 only;
+  re-verify on the target Fedora/EL box before trusting dnf5 numbers
+- `systemctl` for the dnf-automatic timers. Timers absent = automatic
+  updates treated as disabled, not unknown
+
+### pacman (Arch, BlackArch)
+
+- `pacman` for backend detection
+- `checkupdates` from the `pacman-contrib` package for pending-update
+  counting. Without it, pending updates are None (unknown), and you get
+  the `updating:binary_missing_pacman` error entry rather than a count
+- No Arch auto-update mechanism is assumed: auto-updates always read
+  None and emit `updating:auto_upgrades_unresolved`. Expect that entry
+  on every Arch snapshot; it is by design, not a fault
+
+### null
+
+- No recognized manager: all updating features None. Firewalls may
+  still be probed via iptables if present

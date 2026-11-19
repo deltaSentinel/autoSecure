@@ -6,6 +6,13 @@
 #   [2] dead double-assignment of permit_empty_passwords removed
 #   [3] PermitRootLogin scored via explicit risk map (see build_ml_features)
 # Every check returns (raw_dict, errors_list) exactly like before.
+#
+# CHANGES vs 0.2.0:
+#   [BUG-1] check_services: emits errors when systemctl/ss probes fail;
+#           port-open keys become None (unknown) when ss output missing
+#   [BUG-4] check_updating: cause-specific error labels instead of the
+#           generic simulation_failed_offline_*
+#   [minor] check_filesystem: passwd stat failure now also emits an error
 # =====================================================================
 
 import os
@@ -62,7 +69,12 @@ def check_ssh():
 
 
 def listening_sockets():
-    """Return (set_of_ports, is_udp_set) from `ss -tuln`."""
+    """Return (set_of_ports, is_udp_set, ok) from `ss -tuln`.
+    BUG-1 FIX: third element ok=False when the probe produced no usable
+    output (command missing, failure, or timeout), so callers can
+    distinguish 'no sockets' from 'probe failed'.
+    CHECK-THIS contract change: the two callers in tests likely unpack
+    two values; the safest migration is unpacking via slicing/tuple."""
     out = sh(["ss", "-tuln"], timeout=15, ignore_rc=True)
     ports = set()
     udp_ports = set()
@@ -78,7 +90,7 @@ def listening_sockets():
                 ports.add(p)
                 if "udp" in parts[0].lower():
                     udp_ports.add(p)
-    return ports, udp_ports
+    return ports, udp_ports, bool(out)
 
 
 def count_find(paths, perm_expr, extra=()):
@@ -104,11 +116,12 @@ def check_filesystem():
     # world-writable dirs WITHOUT the sticky bit in /tmp and /var/tmp
     out = sh(["find", "/tmp", "/var/tmp", "-xdev", "-type", "d",
               "-perm", "-0002", "!", "-perm", "-1000"],
-             timeout=20, ignore_rc=True)
-    raw["world_writable_dirs_no_sticky"] = (
-        len([l for l in out.splitlines() if l.strip()]) if out else None
-    )
-
+             timeout=20)
+    if rc == 0:
+        raw["world_writable_dirs_no_sticky"] = len([l for l in (out or "").splitlines() if l.strip()])
+    else:
+        raw["world_writable_dirs_no_sticky"] = None 
+        errs.append("fs:tmp_scan_failed")
     raw["suid_binaries"] = count_find(
         ["/usr", "/bin", "/sbin", "/lib"], "-4000")
     raw["sgid_binaries"] = count_find(
@@ -119,6 +132,9 @@ def check_filesystem():
 
     if raw["shadow_permissions"] is None:
         errs.append("fs:shadow:stat_failed")
+    # minor fix: symmetric check for /etc/passwd
+    if raw["passwd_permissions"] is None:
+        errs.append("fs:passwd:stat_failed")
     return raw, errs
 
 
@@ -134,7 +150,7 @@ def check_accounts():
         ]
         nologin_shells = ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false",
                           "/usr/bin/false", "/bin/sync", "/sbin/halt",
-                          "/sbin/shutdown")
+                          "/sbin/shutdown", "/usr/bin/nologin")
         raw["accounts_with_login_shell"] = [
             e.pw_name for e in entries
             if e.pw_shell and e.pw_shell not in nologin_shells
@@ -191,7 +207,7 @@ def check_login_defs():
     raw = {}
     conf = read_file("/etc/login.defs")
     if conf is None:
-        errs.append("login_defs:missing")
+        errs.append("login_defs:mapping_missing")
         return raw, errs
     for key in ("PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_MIN_LEN", "PASS_WARN_AGE"):
         m = re.search(rf"^\s*{key}\s+(\d+)", conf, re.MULTILINE)
@@ -226,7 +242,9 @@ def check_updating():
     """Same output schema as the original apt-only version, but routed
     through the package-manager backend. Raw keys preserved:
       unattended_upgrades_enabled, pending_updates_total,
-      pending_security_updates. Extra additive key: pkg_backend."""
+      pending_security_updates. Extra additive key: pkg_backend.
+    BUG-4 FIX: error suffix now reflects the actual failure cause.
+    Reads backend.last_failure_reason set by pending_updates()."""
     errs = []
     raw = {}
 
@@ -241,25 +259,41 @@ def check_updating():
     raw["pending_updates_total"] = total
     raw["pending_security_updates"] = security
     if total is None:
-        errs.append(f"updating:simulation_failed_offline_{backend.name}")
+        reason = getattr(backend, "last_failure_reason", None)
+        if reason is None:
+            reason = "failed"
+        errs.append(f"updating:{reason}_{backend.name}")
 
     return raw, errs
 
 
 def check_services():
+    """BUG-1 FIX: probes that fail now emit errors, and unknown port
+    state is represented as None instead of False."""
     errs = []
     raw = {}
     out = sh(["systemctl", "list-units", "--type=service",
               "--state=running", "--no-legend", "--plain"],
              timeout=20, ignore_rc=True)
-    running = [l.split()[0] for l in out.splitlines() if l.strip()] if out else None
+    if out:
+        running = [l.split()[0] for l in out.splitlines() if l.strip()]
+    else:
+        running = None
+        errs.append("services:systemctl_list_failed")
     raw["running_services"] = running
 
-    ports, udp_ports = listening_sockets()
-    raw["listening_ports"] = sorted(ports)
-    raw["telnet_open"] = 23 in ports
-    raw["ftp_open"] = 21 in ports
-    raw["snmp_open"] = (161 in ports) or (161 in udp_ports)
-    raw["ssh_default_port_open"] = 22 in ports
+    ports, udp_ports, ss_ok = listening_sockets()
+    if ss_ok:
+        raw["listening_ports"] = sorted(ports)
+        raw["telnet_open"] = 23 in ports
+        raw["ftp_open"] = 21 in ports
+        raw["snmp_open"] = (161 in ports) or (161 in udp_ports)
+        raw["ssh_default_port_open"] = 22 in ports
+    else:
+        raw["listening_ports"] = None
+        raw["telnet_open"] = None
+        raw["ftp_open"] = None
+        raw["snmp_open"] = None
+        raw["ssh_default_port_open"] = None
+        errs.append("services:ss_probe_failed")
     return raw, errs
-

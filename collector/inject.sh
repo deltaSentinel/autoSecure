@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoSecure — misconfiguration injector (LAB TARGETS ONLY)
+# AutoSecure - misconfiguration injector (LAB TARGETS ONLY)
 #
 # Injects a single, reproducible, REVERSIBLE misconfiguration onto a lab
 # machine so the collector can snapshot a labeled "vulnerable" sample.
@@ -16,11 +16,41 @@
 #   sudo python3 collect.py --host-id target-b --tag M07 \
 #        --label vulnerable --inject M07 --out ../dataset
 #   sudo ./inject.sh revert M07
+#
+# DISTRO COUPLING (rpm-family audit, issue #10 criterion 6):
+#   [I1] PKG_FAMILY probe near top; Debian path unchanged in effect
+#   [I2] M10: rpm branch installs telnet-server + enables telnet.socket;
+#        fail-loudly (return 1) so the dispatcher never marks a
+#        misconfig that did not land. Was: apt-get fallback exited 0
+#        on rpm hosts with nothing injected -> poisoned vulnerable label
+#   [I3] M14: rpm branch disables dnf-automatic timers and records
+#        their prior state for revert. Was: wrote an inert apt file and
+#        exited 0 -> same poisoning failure mode as M10
+#   [I4] M09 revert fixed: the read loop bound "active" to svc, so the
+#        guard skipped every line and no firewall was ever restarted
+#        (broken on Debian too; dangerous for the break-phase because a
+#        leaked firewall-off state poisons the next clean baseline)
+#   [I5] exit discipline: apply functions that cannot guarantee their
+#        effect return 1; dispatcher marks applied only on success.
+#        Residue checks detect leftovers, never missing injections;
+#        fail-loudly is the only defense against undetectable misses
 
 set -u
 
 BACKUP_ROOT="/var/lib/autosecure/backups"
 STATE_FILE="/var/lib/autosecure/applied"
+
+# [I1] package-family probe. Probes binaries, not /etc/os-release:
+# ID= can be wrong or absent in stripped LXCs and golden images.
+if command -v dnf >/dev/null 2>&1; then
+    PKG_FAMILY=rpm ; PKG_CMD=dnf
+elif command -v yum >/dev/null 2>&1; then
+    PKG_FAMILY=rpm ; PKG_CMD=yum
+elif command -v apt-get >/dev/null 2>&1; then
+    PKG_FAMILY=deb ; PKG_CMD=apt-get
+else
+    PKG_FAMILY=unknown ; PKG_CMD=""
+fi
 
 require_root() {
     if [[ "$(id -u)" -ne 0 ]]; then
@@ -44,7 +74,7 @@ backup_file() {
 }
 
 restore_files() {
-    # restore_files <ID>  — copies every backed-up file back
+    # restore_files <ID>  - copies every backed-up file back
     local id="$1" f
     [[ -d "$BACKUP_ROOT/$id" ]] || { echo "[-] no backup for $id"; return 1; }
     while read -r f; do
@@ -153,27 +183,66 @@ apply_M09() {
     iptables -F 2>/dev/null || true
     echo "[+] M09: firewall disabled/flushed"
 }
+
+# [I4] FIXED: parse "<svc> active" as (svc, state); the old loop bound
+# "active" to svc and skipped everything, so reverts restarted nothing.
+# ufw enable only fires for ufw, not for every recorded service.
 revert_M09() {
     if [[ -f "$BACKUP_ROOT/M09/fw_state" ]]; then
-        while read -r _ svc _; do
-            [[ "$svc" == "active" ]] && continue
-            systemctl start "$svc" 2>/dev/null && ufw enable 2>/dev/null
+        while read -r svc state _rest; do
+            [[ "$state" == "active" ]] || continue
+            systemctl start "$svc" 2>/dev/null || true
+            if [[ "$svc" == "ufw" ]]; then
+                ufw enable 2>/dev/null || true
+            fi
         done < "$BACKUP_ROOT/M09/fw_state"
     fi
     echo "[+] M09 reverted (restart firewall manually if unsure)"
 }
 
+# [I2] M10 is family-split. rpm: telnet-server provides telnet.socket on
+# Fedora/EL; install, enable, VERIFY the unit is active, and return 1 on
+# any failure so the dispatcher does not mark it applied. deb path kept
+# behaviorally identical, except a failed install now returns 1 instead
+# of exiting 0 through the failure echo (poisoning pattern, [I5]).
 apply_M10() {
+    if [[ "$PKG_FAMILY" == "rpm" ]]; then
+        echo "[~] M10: installing telnet-server (needs network)"
+        if ! "$PKG_CMD" install -y telnet-server; then
+            echo "[-] M10: install failed - NOT marking applied"
+            return 1
+        fi
+        if ! systemctl enable --now telnet.socket; then
+            echo "[-] M10: telnet.socket enable failed - NOT marking applied"
+            return 1
+        fi
+        if ! systemctl is-active --quiet telnet.socket; then
+            echo "[-] M10: telnet.socket not active after enable - NOT marking applied"
+            return 1
+        fi
+        echo "[+] M10: telnet service enabled (telnet.socket)"
+        return 0
+    fi
     if command -v inetutils-inetd >/dev/null 2>&1 || dpkg -l inetutils-inetd >/dev/null 2>&1; then
         systemctl enable --now inetutils-inetd
         echo "[+] M10: telnet service enabled"
     else
         echo "[~] M10: attempting to install inetutils-inetd (needs network)"
-        apt-get install -y inetutils-inetd && systemctl enable --now inetutils-inetd \
-            || echo "[-] M10: install failed (offline?) — target already has inetutils-inetd in lab images"
+        if apt-get install -y inetutils-inetd && systemctl enable --now inetutils-inetd; then
+            echo "[+] M10: telnet service enabled"
+        else
+            echo "[-] M10: install failed - NOT marking applied"
+            return 1
+        fi
     fi
 }
-revert_M10() { systemctl disable --now inetutils-inetd 2>/dev/null; echo "[+] M10 reverted"; }
+revert_M10() {
+    systemctl disable --now inetutils-inetd 2>/dev/null
+    if [[ "$PKG_FAMILY" == "rpm" ]]; then
+        systemctl disable --now telnet.socket 2>/dev/null
+    fi
+    echo "[+] M10 reverted"
+}
 
 apply_M11() {
     cp /bin/bash /usr/local/bin/.autosecure-helper
@@ -196,7 +265,30 @@ apply_M13() {
 }
 revert_M13() { userdel backdoor01 2>/dev/null; echo "[+] M13 reverted"; }
 
+# [I3] M14 is family-split. rpm: dnf-automatic is the mechanism; record
+# enabled timers, disable them, and return 1 when none exist (nothing
+# injectable on that host: forcing it would poison the vulnerable label,
+# same failure mode as M10). Deb path unchanged in effect.
 apply_M14() {
+    if [[ "$PKG_FAMILY" == "rpm" ]]; then
+        mkdir -p "$BACKUP_ROOT/M14"
+        : > "$BACKUP_ROOT/M14/timers.state"
+        local found=0 t
+        for t in dnf-automatic-install.timer dnf-automatic.timer; do
+            if systemctl is-enabled --quiet "$t" 2>/dev/null; then
+                echo "$t enabled" >> "$BACKUP_ROOT/M14/timers.state"
+                found=1
+            fi
+        done
+        if [[ "$found" -eq 0 ]]; then
+            echo "[-] M14: no dnf-automatic timer present on rpm host - NOT marking applied"
+            echo "[-] M14: drop this ID from the campaign --misconfigs list for this host"
+            return 1
+        fi
+        systemctl disable --now dnf-automatic-install.timer dnf-automatic.timer 2>/dev/null || true
+        echo "[+] M14: dnf-automatic timers disabled"
+        return 0
+    fi
     backup_file M14 /etc/apt/apt.conf.d/20auto-upgrades
     cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "0";
@@ -204,7 +296,18 @@ APT::Periodic::Unattended-Upgrade "0";
 EOF
     echo "[+] M14: automatic security updates disabled"
 }
-revert_M14() { restore_files M14; }
+revert_M14() {
+    if [[ "$PKG_FAMILY" == "rpm" && -s "$BACKUP_ROOT/M14/timers.state" ]]; then
+        local t state _rest
+        while read -r t state _rest; do
+            [[ "$state" == "enabled" ]] || continue
+            systemctl enable --now "$t" 2>/dev/null || true
+        done < "$BACKUP_ROOT/M14/timers.state"
+        echo "[+] M14 reverted (timers re-enabled)"
+        return 0
+    fi
+    restore_files M14
+}
 
 apply_M15() {
     if [[ -f /etc/snmp/snmpd.conf ]]; then
@@ -213,7 +316,7 @@ apply_M15() {
         systemctl restart snmpd 2>/dev/null || true
         echo "[+] M15: SNMP default public community string"
     else
-        echo "[-] M15: no /etc/snmp/snmpd.conf — snmpd not installed"
+        echo "[-] M15: no /etc/snmp/snmpd.conf - snmpd not installed"
         return 1
     fi
 }
@@ -233,12 +336,13 @@ M06|AUTH: user with empty password field (victim01)
 M07|AUTH: NOPASSWD sudoers entry
 M08|POLICY: weak password aging/length in login.defs
 M09|NET: firewall disabled and flushed
-M10|NET: telnet service enabled (inetutils-inetd)
+M10|NET: telnet service enabled (rpm: telnet.socket / deb: inetutils-inetd)
 M11|FS: unauthorized SUID shell copy
 M12|FS: world-writable file in /etc
 M13|AUTH: hidden UID-0 backdoor user
-M14|UPDATE: unattended-upgrades disabled
+M14|UPDATE: automatic updates disabled (deb: apt 20auto-upgrades / rpm: dnf-automatic)
 M15|NET: SNMP rocommunity public
+Detected package family: ${PKG_FAMILY}
 "
 
 # ---------------------------------------------------------------------------
@@ -258,9 +362,16 @@ case "${1:-}" in
         ID="${2:-}"
         fn="apply_${ID}"
         if declare -f "$fn" >/dev/null; then
-            "$fn" && mark_applied "$ID"
+            if "$fn"; then
+                mark_applied "$ID"
+            else
+                # [I5] loud skip: unmarked, visible, non-zero exit so
+                # gen_dataset.py's orchestration can abort or log it
+                echo "[-] $ID not applied (skipped marking)"
+                exit 1
+            fi
         else
-            echo "[-] unknown ID '$ID' — try: $0 list"; exit 1
+            echo "[-] unknown ID '$ID' - try: $0 list"; exit 1
         fi
         ;;
     revert)
@@ -270,7 +381,7 @@ case "${1:-}" in
         if declare -f "$fn" >/dev/null; then
             "$fn" && unmark_applied "$ID"
         else
-            echo "[-] unknown ID '$ID' — try: $0 list"; exit 1
+            echo "[-] unknown ID '$ID' - try: $0 list"; exit 1
         fi
         ;;
     *)

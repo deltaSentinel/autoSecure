@@ -72,8 +72,11 @@ def hist_lines(values, cap, bins=10):
     if not present:
         return ["  (no measured values)"]
     lo, hi = 0, max(max(present), cap)
-    width = max(1, (hi - lo + bins - 1) // bins)
-    counts = {}
+    # ceil((hi + 1) / bins): the range 0..hi inclusive must fit in `bins`
+    # bins, so an at-cap value lands inside the last bin instead of one
+    # past it (regression: values == cap fell outside the grid).
+    width = max(1, -(-(hi + 1) // bins))
+    counts = {b: 0 for b in range(bins)}   # pre-init every bin
     for v in present:
         counts[min((v - lo) // width, bins - 1)] += 1
     peak = max(counts.values())
@@ -140,22 +143,20 @@ def main():
     ]
 
     csv_rows = []
-    blocks, real_stats = [], {}
+    real_stats = {}
     for k, cap in FEATURES:
         blk, st = report_block(f"Real data: `{k}`", rv[k], cap)
-        blocks.append(blk)
+        md += blk
         real_stats[k] = st
         for i, v in enumerate(rv[k]):
             csv_rows.append({"dataset": "real", "feature": k,
                              "value": "" if v is None else v})
-    md += blocks
 
     if args.synth:
         sv, sn, _ = load_values(args.synth)
         md += [f"Synthetic reference: `{args.synth}` ({sn} labeled)", ""]
         for k, cap in FEATURES:
             blk, st = report_block(f"Synthetic data: `{k}`", sv[k], cap)
-            blocks.append(blk)
             md += blk
             for i, v in enumerate(sv[k]):
                 csv_rows.append({"dataset": "synth", "feature": k,

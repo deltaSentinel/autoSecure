@@ -45,3 +45,42 @@ def test_gate_shows_real_backup_candidate(con, capsys, monkeypatch, tmp_path):
     main.execute_plan(con, 1, {"R02": None}, [step])
     out = capsys.readouterr().out
     assert "file backup taken at execution" in out and str(cfg) in out
+
+def test_approved_state_precedes_execution(con, monkeypatch):
+    """Invariant 4: consent is durably recorded before mutation."""
+    step = _step("R01", "true")
+    monkeypatch.setattr("builtins.input", lambda p="": "y")
+    monkeypatch.setattr(main.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    main.execute_plan(con, 1, {"R01": None}, [step])
+    row = con.execute("SELECT state FROM actions").fetchone()
+    assert row["state"] == "failed"  # crashed AFTER consent...
+    fb = con.execute("SELECT * FROM actions WHERE state='approved'").fetchone()
+    assert fb is None  # ...transitioned through approved, not stuck at proposed
+
+def test_in_gate_rollback_success(con, monkeypatch):
+    step = _step("R08", "ufw enable", rollback="ufw disable")
+    inputs = iter(["y", "y"])          # approve action, then approve rollback
+    monkeypatch.setattr("builtins.input", lambda p="": next(inputs))
+    monkeypatch.setattr(main, "AGENT_BACKUP_DIR",
+                        str(main.os.path.join("/tmp", "as-backup-test")))
+    class R: returncode = 0; stdout = ""; stderr = ""
+    monkeypatch.setattr(main.subprocess, "run", lambda *a, **k: R())
+    main.execute_plan(con, 1, {"R08": None}, [step])
+    assert con.execute(
+        "SELECT state FROM actions").fetchone()["state"] == "rolled_back"
+
+
+def test_in_gate_rollback_failure_keeps_executed(con, monkeypatch):
+    step = _step("R08", "ufw enable", rollback="ufw disable")
+    inputs = iter(["y", "y"])
+    monkeypatch.setattr("builtins.input", lambda p="": next(inputs))
+    class R: returncode = 0; stdout = ""; stderr = ""   # forward ok
+    class RB: returncode = 1; stdout = ""; stderr = "boom"
+    monkeypatch.setattr(main.subprocess, "run",
+                        lambda cmd, **k: RB() if "disable" in cmd else R())
+    monkeypatch.setattr(main, "AGENT_BACKUP_DIR",
+                        str(main.os.path.join("/tmp", "as-backup-test")))
+    main.execute_plan(con, 1, {"R08": None}, [step])
+    row = con.execute("SELECT state, output FROM actions").fetchone()
+    assert row["state"] == "executed" and "rollback FAILED" in row["output"]

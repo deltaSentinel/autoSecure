@@ -80,7 +80,6 @@ def fused_verdicts(samples, p, threshold, fusion_k):
     does, then compute composite_risk. Returns (risk_scores, verdicts)
     where verdict=1 mirrors main()'s "action required" boundary (risk >= 0.5).
     """
-    import math  # composite_risk hardcodes e; local copy below stays faithful
     scores, verdicts = [], []
     for s, pi in zip(samples, p):
         raw_findings = evaluate_reflex(s["raw"])
@@ -91,14 +90,13 @@ def fused_verdicts(samples, p, threshold, fusion_k):
         if pi is not None and not raw_findings and pi >= threshold:
             eff, _w = fuse_severity(round(pi, 2), pi, threshold, fusion_k)
             fused.append({"rule_id": "L1", "severity": eff})
-        # faithful copy of composite_risk body (max fusion), so the
-        # experiment documents the agent's actual formula:
-        if fused:
-            reflex_risk = 1.0 - math.exp(-sum(x["severity"] for x in fused))
-        else:
-            reflex_risk = 0.0
-        risk = max(reflex_risk, pi) if pi is not None else reflex_risk
-        scores.append(round(risk, 3))
+        # imported directly from the agent, same guarantee as
+        # evaluate_reflex: the experiment can never drift from the
+        # deployed formula
+        risk = composite_risk(fused, pi)
+        scores.append(risk)
+        # verdict mirrors main()'s boundary, which reads the ROUNDED
+        # composite_risk output ("healthy" if risk < 0.5)
         verdicts.append(1 if risk >= 0.5 else 0)
     return np.array(scores), np.array(verdicts)
 
@@ -153,13 +151,17 @@ def l1_probabilities(samples, keys, seed, folds):
     X = np.array([[0.0 if s["ml"].get(k) is None else float(s["ml"].get(k, 0.0))
                    for k in keys] for s in samples])
     y = np.array([s["label"] for s in samples])
-    n_folds = min(folds, Counter(y)[min(Counter(y))])
+    minority = min(Counter(y).values())
+    if minority < 2:
+        sys.esit("[-] minority class has < 2 samples; stratified CV "
+                 "cannot split it (need at least 2 per class)")
+    n_folds = min(folds, minority)
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     model = CalibratedClassifierCV(estimator=base_rf(), method="sigmoid")
     prob = cross_val_predict(model, X, y, cv=skf,
                              method="predict_proba")[:, 1]
     print(f"[+] L1 out-of-fold probabilities via {n_folds}-fold CV")
-    return prob
+    return prob, n_folds
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ def main():
     l0_pred, l0_detail = l0_decisions(samples)
 
     # L1 (out-of-fold)
-    p = l1_probabilities(samples, keys, args.seed, args.folds)
+    p, n_folds = l1_probabilities(samples, keys, args.seed, args.folds)
     l1_pred = (p >= args.threshold).astype(int)
 
     # arbitration variants
@@ -239,6 +241,9 @@ def main():
     # ---- analysis: which samples does each layer catch/miss? --------------
     only_l0 = only_l1 = both = neither = 0
     for i, s in enumerate(samples):
+        if s["label"] != 1:
+            continue # overlap = catch coverage on vulnerable samples;
+                     # clean-sample FPs are tallied seperately below
         l0h, l1h = l0_pred[i] == 1, l1_pred[i] == 1
         if l0h and l1h:
             both += 1
@@ -246,8 +251,12 @@ def main():
             only_l0 += 1
         elif l1h:
             only_l1 += 1
-        elif s["label"] == 1:
+        else:
             neither += 1
+    
+    vulnerable_total = int(sum(s["label"] == 1 for s in samples))
+    assert both + only_l0 + only_l1 + neither == vulnerable_total, \
+        "overlap counts no longer partition the vulnerable set"
 
     # L0 blind spots: vulnerable samples no reflex rule catches
     l0_missed_tags = Counter()
@@ -303,7 +312,7 @@ def main():
         f"- Dataset: **{len(samples)}** samples, "
         f"**{len(keys)}** features, L1 threshold **{args.threshold}**",
         f"- L1 probabilities are out-of-fold "
-          f"({args.folds}-fold stratified CV) — no leakage.",
+          f"({n_folds}-fold stratified CV) — no leakage.",
         "",
         "## Detector comparison",
         "",
@@ -311,8 +320,9 @@ def main():
         "|----------|----------|-----------|--------|-----|---------|--------------|",
     ]
     for name, m in detectors.items():
-        auc = f"{m['roc_auc']:.3f}" if m.get("roc_auc") else "n/a"
-        fp_col = m["fp"] if name != "INTERSECT" else m["fp"]
+        auc = (f"{m['roc_auc']:.3f}" 
+              if m.get("roc_auc") is not None else "n/a")
+        fp_col = m["fp"]
         md.append(f"| {name} | {m['accuracy']:.3f} | {m['precision']:.3f} | "
                   f"{m['recall']:.3f} | {m['f1']:.3f} | {auc} | {fp_col} |")
     
@@ -439,7 +449,7 @@ def main():
 
     print("\n=== Headline ===")
     for name, m in detectors.items():
-        print(f"  {name:<16} P={m['precision']:.3f} R={m['recall']:.3f} "
+        print(f"  {name:<24} P={m['precision']:.3f} R={m['recall']:.3f} "
               f"F1={m['f1']:.3f}")
     
     hist = os.path.join(args.out, "history")

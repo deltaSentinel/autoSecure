@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AutoSecure — synthetic dataset generator.
+"""AutoSecure - synthetic dataset generator.
 
 Generates collector-compatible snapshots WITHOUT touching any real host,
 by modeling clean-host baselines and misconfiguration effects over the
@@ -12,11 +12,29 @@ meta (synthetic: true) and never silently mixed without your knowledge.
 Modeling:
   1. Clean baseline drawn from a pool of plausible host "profiles"
      (minimal container, standard server, desktop) with per-feature noise.
-  2. Each misconfig (M01-M15) applies a deterministic feature effect —
-     identical to what inject.sh actually causes — plus small noise.
+  2. Each misconfig (M01-M15) applies a deterministic feature effect -
+     identical to what inject.sh actually causes - plus small noise.
   3. Combos apply effects jointly (some interact, e.g. M06+M07 both stem
      from the victim01 account).
   4. Random degraded-check masking simulates non-root collectors.
+
+CHANGES vs 1.1.0:
+  [A] clean_baseline: risk_ssh_permit_root_login now draws from
+      {"no", "prohibit-password"} with the explicit risk map, closing
+      the PAIRED ACTION required by collect.py FIX [3]. Was: always
+      drawn as a boolean False then encoded 0 regardless of raw value.
+  [B] clean_baseline: risk_autoupdates_disabled fixed. Was: drawn 0
+      then inverted by the leftover buggy raw-sync, so clean hosts
+      emitted ml=1 ("autoupdates disabled") while raw said enabled.
+  [C] CLEAN_RAW_TEMPLATE services: ssh_default_port_open and
+      running_services added for schema parity with collect.py 0.2.1
+      raw keys. Harmless additive keys (collector raw has always
+      included them; the template simply omitted them).
+  [D] PROFILES: entries aligned with collector feature reality
+      (listed below).
+  [E] emit(): ran_as_root now False iff anything was masked, and
+      check_errors uses synthetic:mask:<feature>, retaining origin
+      transparency while matching collector error-entry style.
 
 USAGE:
   python3 synth_dataset.py --out ../dataset_synth --clean 150 --singles 10 --combos 200
@@ -35,7 +53,7 @@ import time
 from datetime import datetime, timezone
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # misconfig effects: what inject.sh actually changes in features_ml
@@ -98,7 +116,9 @@ CLEAN_RAW_TEMPLATE = {
     "network_defense": {"firewall_active": True, "fail2ban_active": False},
     "updating": {"unattended_upgrades_enabled": True},
     "services": {"telnet_open": False, "ftp_open": False, "snmp_open": False,
-                 "listening_ports": [22]},
+                 "ssh_default_port_open": True,
+                 "listening_ports": [22],
+                 "running_services": ["sshd"]},
 }
 
 
@@ -134,7 +154,16 @@ PROFILES = {
 
 def clean_baseline(rng, profile):
     prof = PROFILES[profile]
+    # FIX [A]: permit_root_login must draw from {"no", "prohibit-password"}
+    # and score via the explicit risk map, pairing with collect.py FIX [3].
+    # WAS: boolean False -> ml 0 for every host, which trains the model to
+    # believe "prohibit-password" is safe (its Debian default!).
     permit_root_login = rng.choice(("no", "prohibit-password"))
+    # FIX [B]: risk_autoupdates_disabled must be 0 for clean hosts, matching
+    # raw unattended_upgrades_enabled=True. WAS: drawn 0 here, then the
+    # buggy raw-sync below flipped raw to False so ml no longer matched,
+    # labeling all clean hosts as having autoupdates disabled.
+    raw = deep_copy(CLEAN_RAW_TEMPLATE)
     ml = {
         "risk_ssh_permit_root_login":
             1 if permit_root_login == "prohibit-password" else 0,
@@ -164,7 +193,6 @@ def clean_baseline(rng, profile):
         "num_listening_ports": rng.randint(*prof["num_listening_ports"]),
         "num_running_services": rng.randint(*prof["num_running_services"]),
     }
-    raw = deep_copy(CLEAN_RAW_TEMPLATE)
     raw["ssh"]["permit_root_login"] = permit_root_login
     if ml["risk_ssh_password_auth"]:
         raw["ssh"]["password_authentication"] = "yes"
@@ -174,8 +202,9 @@ def clean_baseline(rng, profile):
         raw["login_defs"]["pass_min_len"] = 5
     if ml["risk_firewall_disabled"]:
         raw["network_defense"]["firewall_active"] = False
-    if ml["risk_autoupdates_disabled"]:
-        raw["updating"]["unattended_upgrades_enabled"] = False  # deliberate typo?
+    # FIX [B] removed the buggy inversion here: WAS
+    #   if ml["risk_autoupdates_disabled"]:
+    #       raw["updating"]["unattended_upgrades_enabled"] = False
     return ml, raw
 
 
@@ -323,7 +352,7 @@ def main():
     print(f"[+] combos: {args.combos}")
 
     print(f"[+] wrote {n} synthetic snapshots to {args.out}")
-    print(f"[.] next: train on --dataset {args.out}, TEST on real snapshots")
+    print(f"[-] next: train on --dataset {args.out}, TEST on real snapshots")
     print("[.] from Proxmox LXC clones (train/test separation mandatory!)")
 
 

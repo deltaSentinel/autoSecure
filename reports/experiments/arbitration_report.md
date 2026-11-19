@@ -24,9 +24,9 @@
 
 ## Layer overlap (on vulnerable samples)
 
-- Caught by BOTH layers: **399**
-- Caught ONLY by L0 (reflex): **68**
-- Caught ONLY by L1 (classifier): **13** — *the compound-config blind-spot evidence for hybrid design*
+- Caught by BOTH layers: **398**
+- Caught ONLY by L0 (reflex): **22**
+- Caught ONLY by L1 (classifier): **10** — *the compound-config blind-spot evidence for hybrid design*
 - Missed by ALL detectors: **0**
 
 ## Blind spots by tag (vulnerable samples missed)

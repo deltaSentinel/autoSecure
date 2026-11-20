@@ -6,7 +6,13 @@
 #   - identical meta keys (plus additive os-release/pkg-backend info)
 #   - identical features_raw sections and raw keys
 #   - identical 26 features_ml keys, caps, and None-propagation
-# Behavioral changes vs original: bugfixes [1][2][3] only (see checks.py).
+# Behavioral changes vs original collector 0.2.0:
+#   [1][2][3] see checks.py header
+#   [4] services ML features propagate None when probe state is
+#       unknown (was: silent 0). PAIRED ACTION REQUIRED: same rules
+#       as [3]; see RETRAIN CHECKLIST below before shipping.
+#   [5] refuses to overwrite an existing snapshot filename (same
+#       second, same host/tag); was: silent overwrite. Exits 2.
 #
 # Usage (unchanged):
 #   sudo python3 collect.py --host-id target-b --tag baseline \
@@ -29,11 +35,11 @@ from datetime import datetime, timezone
 from common import parse_os_release
 import checks
 
-COLLECTOR_VERSION = "0.2.0"   # bumped: backend split + bugfixes [1][2][3]
+COLLECTOR_VERSION = "0.2.1"   # bumped: bugfixes [4] and [5] on top of 0.2.0
 
 
 # ---------------------------------------------------------------------------
-# ML feature vector — every feature oriented so 1 / higher = MORE risk
+# ML feature vector - every feature oriented so 1 / higher = MORE risk
 # Key set, caps, and orientation are IDENTICAL to the original 26 features.
 # ---------------------------------------------------------------------------
 
@@ -50,7 +56,7 @@ def truthy(v):
 
 
 # FIX [3]: PermitRootLogin previously went through truthy(), so
-# "prohibit-password" (the Debian default!) scored 0 — a silent blind
+# "prohibit-password" (the Debian default!) scored 0 - a silent blind
 # spot for the M01 attack surface. Explicit map instead.
 # PAIRED ACTION REQUIRED: synth_dataset.py clean_baseline must draw
 # permit_root_login from {"no", "prohibit-password"} and set the ml
@@ -132,13 +138,28 @@ def build_ml_features(raw, errors=None):
     f["risk_pending_updates"] = clip(up.get("pending_updates_total"), 100)
     f["risk_pending_security_updates"] = clip(up.get("pending_security_updates"), 100)
 
+    # FIX [4]: unknown service probe state must propagate as None,
+    # never silently score as 0 ("safe"). Previous versions coerced
+    # None here via `1 if x else 0`, so a failed systemctl/ss probe
+    # looked identical to "no risky services exposed" in the feature
+    # vector. Guard style now matches every other feature group.
+    # PAIRED ACTION REQUIRED: same as [3]; apply with the synth_dataset
+    # clean_baseline patch, regeneration, and retrain, or a model
+    # trained on the old silent-0 semantics will misjudge unknowns.
     svcs = raw.get("services", {})
-    f["risk_telnet_open"] = 1 if svcs.get("telnet_open") else 0
-    f["risk_ftp_open"] = 1 if svcs.get("ftp_open") else 0
-    f["risk_snmp_open"] = 1 if svcs.get("snmp_open") else 0
-    f["risk_ssh_default_port_open"] = 1 if svcs.get("ssh_default_port_open") else 0
-    f["num_listening_ports"] = clip(
-        len(svcs.get("listening_ports") or []), 60)
+    for key, feat in (
+        ("telnet_open", "risk_telnet_open"),
+        ("ftp_open", "risk_ftp_open"),
+        ("snmp_open", "risk_snmp_open"),
+        ("ssh_default_port_open", "risk_ssh_default_port_open"),
+    ):
+        v = svcs.get(key)
+        if v is None:
+            f[feat] = None
+        else:
+            f[feat] = 1 if v else 0
+    lp = svcs.get("listening_ports")
+    f["num_listening_ports"] = clip(len(lp), 60) if lp is not None else None
     rs = svcs.get("running_services")
     f["num_running_services"] = clip(len(rs), 80) if rs is not None else None
 
@@ -206,6 +227,16 @@ def main():
     stamp = int(time.time())
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{args.host_id}_{args.tag}")
     fname = os.path.join(args.out, f"{safe}_{stamp}.json")
+
+    # FIX [5]: two runs for the same host/tag within one second used to
+    # silently overwrite the first snapshot. Refuse instead; re-run
+    # after a second or vary --tag. Exit code 2 = collision, not success.
+    if os.path.exists(fname):
+        print(f"[!] snapshot already exists: {fname}")
+        print("[!] refusing to overwrite; wait a second or use a "
+              "different --tag")
+        raise SystemExit(2)
+
     with open(fname, "w") as fh:
         json.dump(snapshot, fh, indent=2)
 

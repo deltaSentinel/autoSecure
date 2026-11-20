@@ -10,12 +10,19 @@
 # Unknown distros -> NullBackend -> features become None, which the
 # agent/model/L0 already tolerate via the unresolved path.
 #
-# IMPORTANT — the AptBackend reproduces the ORIGINAL Debian logic
+# IMPORTANT - the AptBackend reproduces the ORIGINAL Debian logic
 # byte-for-byte (regex, 50unattended-upgrades fallback, Inst-line
 # counting, "SECURITY" matching) so existing snapshots stay comparable.
+#
+# CHANGES vs 0.2.0:
+#   [BUG-3] PacmanBackend: single checkupdates invocation (was two).
+#           rc and listing now guaranteed to come from the same run.
+#   [minor] import os moved to module top (was after AptBackend).
 # =====================================================================
 
+import os
 import re
+import subprocess
 
 from common import sh, sh_bool, sh_rc, read_file, which
 
@@ -61,9 +68,6 @@ class AptBackend(PkgBackend):
         if m:
             return int(m.group(1)) >= 1
         return None
-
-
-import os  # noqa: E402  (kept next to its sole use in AptBackend)
 
 
 class DnfBackend(PkgBackend):
@@ -127,19 +131,30 @@ class DnfBackend(PkgBackend):
 
 
 class PacmanBackend(PkgBackend):
-    """Arch/BlackArch. checkupdates is from pacman-contrib."""
+    """Arch/BlackArch. checkupdates is from pacman-contrib.
+    BUG-3 FIX: single invocation; rc and listing from the same run."""
     name = "pacman"
 
     def pending_updates(self):
         if not which("checkupdates"):
             return (None, None)
-        rc = sh_rc(["checkupdates"], timeout=120)
+        # Single invocation: capture output and rc atomically. Was two
+        # calls (sh_rc then sh); mirrors could sync between them, so the
+        # rc we acted on and the count we published came from different
+        # runs. Also avoids a doubled 120 s timeout (~4 min worst case).
+        try:
+            proc = subprocess.run(
+                ["checkupdates"],
+                capture_output=True, text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return (None, None)
+        out = proc.stdout or ""
+        rc = proc.returncode
         if rc == 2:
             return (0, None)    # Arch has no security-update split
         if rc != 0:
-            return (None, None)
-        out = sh(["checkupdates"], timeout=120, ignore_rc=True)
-        if out is None:
             return (None, None)
         total = len([l for l in out.splitlines() if l.strip()])
         return (total, None)
@@ -150,7 +165,7 @@ class PacmanBackend(PkgBackend):
 
 
 def detect_backend():
-    """Probe BINARIES, not /etc/os-release — ID= can be wrong or absent
+    """Probe BINARIES, not /etc/os-release - ID= can be wrong or absent
     in stripped LXCs and golden-copy Pi images."""
     if which("apt-get"):
         return AptBackend()

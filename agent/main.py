@@ -12,9 +12,14 @@ Full 4-layer agent over the collector snapshots:
 SAFETY INVARIANTS (enforced here, not by convention):
     1. READ-ONLY BY DEFAULT. Nothing is mutated on the target unless
        --act is passed AND the operator approves each step interactively.
-    2. REVERSIBILITY. Every mutating action is drawn from the remediation KB, which carries a pre-
-       registered rollback command or an explicit IRREVERSIBLE flag surfaced at the approval gate.
-       Rollback state is persisted before any action executes.
+    2. REVERSIBILITY. Every mutating action is drawn from the remediation KB,
+       which carries a pre-registered rollback command or an explicit
+       IRREVERSIBLE flag surfaced at the approval gate. Rollback state is
+       persisted before any action executes, and stored rollbacks are
+       replayable in-gate immediately after any successfully executed step
+       (operator-confirmed; the row transitions to rolled_back on success and
+       stays executed if the rollback itself fails, with the attempt recorded
+       in the action's output for forensics).
     3. FAIL-STATIC. Missing model, missing snapshot fields, or unreadable
        features degrade the run and are REPORTED — the agent never guesses.
     4. AUDITABILITY. Every decision, approval, rejection, and execution
@@ -96,7 +101,7 @@ CREATE TABLE IF NOT EXISTS actions (
     finding_id    INTEGER REFERENCES findings(id),
     command       TEXT,
     rollback      TEXT,
-    state         TEXT,         -- proposed|approved|executed|rolled_back|failed
+    state         TEXT,         -- proposed|approved|rejected|executed|rolled_back|failed
     output        TEXT,
     ts            TEXT
 );
@@ -236,7 +241,7 @@ REFLEX_RULES = [
 ]
 
 
-def evaluate_reflex(raw):
+def evaluate_reflex(raw, skips_out=None):
     """L0: run the condition-action catalog. Returns list of findings."""
     findings = []
     for rule_id, cond, severity, desc in REFLEX_RULES:
@@ -247,6 +252,8 @@ def evaluate_reflex(raw):
                     "severity": severity, "evidence": desc,
                 })
         except Exception as e:  # never let one bad field kill the sweep
+            if skips_out is not None:
+                skips_out.append(rule_id)
             print(f"[!] reflex rule {rule_id} skipped ({e.__class__.__name__})",
                   file=sys.stderr)
     return findings
@@ -580,10 +587,15 @@ def plan(con, findings, alpha=ALPHA_DEFAULT, beta=BETA_DEFAULT,
         if rid == "R04":
             action, rollback = build_uid0_remediation(f.get("_raw") or {})
             if action is None:
-                continue
-            disrupt, rationale = 0.7, (action, rollback, 0.7,
-                        "Remove unauthorized UID-0 accounts "
-                        "(generated from observed list)")
+                disrupt = None
+                rationale = ("R04 fired but remediation could not be "
+                             "generated (no useres_uid0_extra list in the "
+                             "finding's raw data) - manual investigation "
+                             "required")
+            else:
+                disrupt = 0.7
+                rationale = ("Remove unauthorized UID-0 accounts "
+                             "(generated from observed list)")
         else:
             action, rollback, disrupt, rationale = REMEDIATION_KB.get(
                 rid, (None, None, None, "no remediation registered"))
@@ -640,22 +652,17 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
     approved_any = False
     for idx, step in enumerate(steps):
         if step["action"] is None:
-            if step["rule_id"] == "R04":
-                continue    # dynamic step with no usable raw data: skip silently
             print(f"\n[{idx}] {step['rule_id']}: {step['rationale']} "
                   f"(no auto-action) — record for manual review")
             continue
 
         finding_id = findings_rows.get(step["rule_id"])
-        con.execute(
+        cur = con.execute(
             "INSERT INTO actions(scan_id, finding_id, command, rollback, "
             "state, ts) VALUES (?, ?, ?, ?, 'proposed', ?)",
             (scan_id, finding_id, step["action"], step["rollback"], utcnow()))
         con.commit()
-        action_id = con.execute(
-            "SELECT id FROM actions WHERE scan_id=? AND command=? "
-            "ORDER BY id DESC LIMIT 1",
-            (scan_id, step["action"])).fetchone()["id"]
+        action_id = cur.lastrowid
 
         candidates = _touched_files(step["action"])
         if step["rollback"]:
@@ -694,6 +701,13 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
                       f"{step['rule_id']}]")
                 continue
 
+        # consent recorded before anything mutates (invariant 4): the
+        # row proves the operator said yes even if execution crashes
+        # before the outcome write
+        con.execute("UPDATE actions SET state='approved' WHERE id=?",
+                    (action_id,))
+        con.commit()
+
         # APPROVED — execute with backup-first discipline
         try:
             backups = _backup_paths(step["action"])
@@ -717,6 +731,45 @@ def execute_plan(con, scan_id, findings_rows, steps, yes_all=False):
             print(f"    [{'+' if ok else '!'}] "
                   f"{'executed' if ok else 'FAILED'} — rollback: {tail}")
             approved_any = approved_any or ok
+
+            # In-gate rollback (issue bug 3): the sole executable path
+            # for stored rollback commands. Eligibility is
+            # state='executed' only (this branch, since ok is True);
+            # consent mirrors the forward gate but NON-consent is the
+            # --yes-all default (see issue discussion).
+            if ok and step["rollback"]:
+                rb = ("n" if yes_all else
+                      input("    Roll back now? [y/N] ").strip().lower())
+                if rb == "y":
+                    try:
+                        rr = subprocess.run(step["rollback"], shell=True,
+                                            capture_output=True, text=True,
+                                            timeout=60)
+                        out_tail = (rr.stdout + rr.stderr)[-500:]
+                        if rr.returncode == 0:
+                            con.execute(
+                                    "UPDATE actions SET state='rolled_back', "
+                                    "output=COALESCE(output,'')||? WHERE id=?",
+                                    (f"\n[rollback ok] {out_tail}", action_id))
+                            con.commit()
+                            print("    [+] rolled back — state='rolled_back'")
+                        else:
+                            # rollback failed: state MUST stay 'executed'
+                            # (the host is still mutated); outcome is
+                            # annotated in output for forensics
+                            con.execute(
+                                    "UPDATE actions SET "
+                                    "output=COALESCE(output,'')||? WHERE id=?",
+                                    (f"\n[rollback FAILED rc={rr.returncode}] "
+                                     f"{out_tail}", action_id))
+                            con.commit()
+                            print("    [!] rollback FAILED — state remains "
+                                  "'executed'; recover manually via the "
+                                  "recorded rollback command")
+                    except Exception as e:
+                        print(f"    [-] rollback error: {e} — state remains "
+                              "'executed'; recover manually")
+
         except Exception as e:
             con.execute("UPDATE actions SET state='failed', output=? WHERE id=?",
                         (str(e), action_id))
@@ -856,7 +909,13 @@ def main():
           + (" [explicit CLI flags override learned values]" if overridden
              else ""))
 
-    l0 = evaluate_reflex(snap["features_raw"])
+    reflex_skips = []
+    l0 = evaluate_reflex(snap["features_raw"], skips_out=reflex_skips)
+    if reflex_skips:
+        print(f"[!] {len(reflex_skips)} reflex rules skipped on malformed "
+              f"data: {', '.join(reflex_skips)} — findings may be "
+              f"incomplete (fail-static)")
+
     p_vuln, importances, l1_note = classify(snap["features_ml"], args.model)
     findings = diagnose(l0, p_vuln, importances, deltas,
                         p_threshold=args.p_threshold,
@@ -933,6 +992,7 @@ def main():
                       "p_vuln": f.get("p_vuln")} for f in findings],
         "planned_steps": len(steps),
         "report": os.path.abspath(report_path),
+        "reflex_skips": reflex_skips,
         "verdict": "healthy" if risk < 0.5 else "action required",
     }
     print(json.dumps(result, indent=2))

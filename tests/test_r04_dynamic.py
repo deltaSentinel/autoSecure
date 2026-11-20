@@ -52,6 +52,25 @@ def test_plan_end_to_end_uses_observed_names(tmp_path):
     steps = main.plan(con, [finding])
     assert steps and steps[0]["action"] and "toor" in steps[0]["action"]
     assert "backdoor01" not in steps[0]["action"]
+    assert isinstance(steps[0]["rationale"], str), \
+        "R04 rationale leaked a tuple (regression of issue bug 1)"
 
 def test_kb_has_no_hardcoded_r04():
     assert "R04" not in main.REMEDIATION_KB
+
+def test_plan_records_unbuildable_r04(tmp_path):
+    """Bug 6: R04 without usable raw data becomes a reported no-action
+    step, never a silent drop."""
+    con = main.open_memory(str(tmp_path / "mem.db"))
+    finding = {"rule_id": "R04", "layer": "L0", "severity": 1.0,
+               "evidence": "test"}   # note: no _raw
+    steps = main.plan(con, [finding])
+    assert len(steps) == 1
+    assert steps[0]["action"] is None
+    assert "manual investigation" in steps[0]["rationale"]
+
+def test_reflex_skips_are_collected():
+    bad = {"login_defs": {"pass_min_len": "12abc"}}   # string int -> R09 TypeError
+    skips = []
+    findings = main.evaluate_reflex(bad, skips_out=skips)
+    assert "R09" in skips and not findings
